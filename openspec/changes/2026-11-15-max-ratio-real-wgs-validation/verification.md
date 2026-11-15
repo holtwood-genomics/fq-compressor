@@ -40,6 +40,7 @@
 | `shellcheck scripts/fetch_real_wgs_ref_bench.sh` | passed |
 | `git diff --check` | passed |
 | `python3 -m json.tool docs/max-ratio-baselines/datasets.json` | passed |
+| GitHub Actions `414087a` | build-and-test / clang-tidy / sanitizer / tsan / fuzz / coverage / release-build / notes 全绿 |
 
 ## Notes
 
