@@ -34,14 +34,13 @@ constexpr std::uint32_t kFlagPaired = 1U << 0U;
 constexpr std::uint8_t kIdCodecZstd = 1;
 constexpr std::uint8_t kSequenceCodecPackedZstd = 1;
 constexpr std::uint8_t kQualityCodecZstd = 1;
-constexpr std::size_t kCodecMemoryReserve = std::size_t{16} * 1024 * 1024;
 // ID/sequence streams always compress at this level (throughput-oriented; the
 // ratio/level curve flattens early on these streams). Only the quality stream
 // gets a configurable level (ArchiveOptions::qualityZstdLevel), bounded by the
 // public kMinZstdLevel/kMaxZstdLevel (single source of truth, shared with CLI).
 constexpr int kStreamZstdLevel = 1;
 
-using Bytes = std::vector<std::uint8_t>;
+using Bytes = ByteBuffer;
 
 void appendU16(Bytes& output, std::uint16_t value) {
     output.push_back(static_cast<std::uint8_t>(value));
@@ -217,22 +216,27 @@ private:
     return std::string(reinterpret_cast<const char*>(bytes->data()), bytes->size());
 }
 
-[[nodiscard]] auto baseCode(char base, bool& exceptional) noexcept -> std::uint8_t {
-    exceptional = false;
-    switch (base) {
-        case 'A':
-            return 0;
-        case 'C':
-            return 1;
-        case 'G':
-            return 2;
-        case 'T':
-            return 3;
-        default:
-            exceptional = true;
-            return 0;
+// 碱基分类表：0–3 = A/C/G/T，4 = 合法但非 ACGT（异常槽，2-bit 值写 0），
+// 0xFF = 非法字节。用 256 字节查表替代逐字符 switch 与 contains，热循环可以
+// 4 碱基一组展开；ARM 上 clang 不会向量化 switch 版本（已用 -Rpass 验证）。
+inline constexpr std::uint8_t kExceptionalBaseCode = 4U;
+inline constexpr std::uint8_t kInvalidBaseCode = 0xFFU;
+
+[[nodiscard]] constexpr auto makeBaseCodes() noexcept {
+    std::array<std::uint8_t, 256> codes{};
+    codes.fill(kInvalidBaseCode);
+    codes[static_cast<std::uint8_t>('A')] = 0;
+    codes[static_cast<std::uint8_t>('C')] = 1;
+    codes[static_cast<std::uint8_t>('G')] = 2;
+    codes[static_cast<std::uint8_t>('T')] = 3;
+    constexpr std::string_view kExceptionalBases = "RYSWKMBDHVNacgtryswkmbdhvn";
+    for (const char base : kExceptionalBases) {
+        codes[static_cast<std::uint8_t>(base)] = kExceptionalBaseCode;
     }
+    return codes;
 }
+
+inline constexpr auto kBaseCodes = makeBaseCodes();
 
 [[nodiscard]] auto codeBase(std::uint8_t code) noexcept -> char {
     constexpr std::array<char, 4> kBases = {'A', 'C', 'G', 'T'};
@@ -258,6 +262,8 @@ private:
         !record.comment.contains('\n');
 }
 
+inline constexpr std::uint32_t kBaseBits = 2U;
+
 void appendPackedSequence(Bytes& output, std::string_view sequence) {
     appendVarint(output, sequence.size());
     const auto packedSize = packedSequenceSize(sequence.size());
@@ -265,14 +271,24 @@ void appendPackedSequence(Bytes& output, std::string_view sequence) {
     output.resize(output.size() + packedSize, 0);
 
     std::size_t exceptionCount = 0;
-    for (std::size_t index = 0; index < sequence.size(); ++index) {
-        bool exceptional = false;
-        const auto code = baseCode(sequence[index], exceptional);
-        const auto shift = static_cast<unsigned>((index % 4) * 2);
-        output[packedStart + index / 4] |= static_cast<std::uint8_t>(code << shift);
-        if (exceptional) {
-            ++exceptionCount;
-        }
+    std::size_t index = 0;
+    // 4 碱基一组写满一个字节。异常碱基的 2-bit 槽写 0（4 & 3 == 0），与旧实现一致。
+    for (; index + 4 <= sequence.size(); index += 4) {
+        const auto c0 = kBaseCodes[static_cast<std::uint8_t>(sequence[index])];
+        const auto c1 = kBaseCodes[static_cast<std::uint8_t>(sequence[index + 1])];
+        const auto c2 = kBaseCodes[static_cast<std::uint8_t>(sequence[index + 2])];
+        const auto c3 = kBaseCodes[static_cast<std::uint8_t>(sequence[index + 3])];
+        output[packedStart + index / 4] = static_cast<std::uint8_t>(
+            (c0 & 0x03U) | ((c1 & 0x03U) << kBaseBits) | ((c2 & 0x03U) << (2U * kBaseBits)) |
+            ((c3 & 0x03U) << (3U * kBaseBits)));
+        exceptionCount += static_cast<std::size_t>(c0 > 3U) + static_cast<std::size_t>(c1 > 3U) +
+            static_cast<std::size_t>(c2 > 3U) + static_cast<std::size_t>(c3 > 3U);
+    }
+    for (; index < sequence.size(); ++index) {
+        const auto code = kBaseCodes[static_cast<std::uint8_t>(sequence[index])];
+        output[packedStart + index / 4] |=
+            static_cast<std::uint8_t>((code & 0x03U) << ((index % 4) * 2));
+        exceptionCount += static_cast<std::size_t>(code > 3U);
     }
 
     appendVarint(output, exceptionCount);
@@ -282,9 +298,7 @@ void appendPackedSequence(Bytes& output, std::string_view sequence) {
     std::size_t previous = 0;
     std::size_t emitted = 0;
     for (std::size_t position = 0; position < sequence.size(); ++position) {
-        bool exceptional = false;
-        (void)baseCode(sequence[position], exceptional);
-        if (exceptional) {
+        if (kBaseCodes[static_cast<std::uint8_t>(sequence[position])] > 3U) {
             appendVarint(output, emitted == 0 ? position : position - previous);
             output.push_back(static_cast<std::uint8_t>(sequence[position]));
             previous = position;
@@ -426,13 +440,12 @@ struct RawStreamSizes {
         std::size_t exceptionCount = 0;
         std::size_t previous = 0;
         for (std::size_t position = 0; position < record.sequence.size(); ++position) {
-            if (!validIupacBase(record.sequence[position])) {
+            const auto code = kBaseCodes[static_cast<std::uint8_t>(record.sequence[position])];
+            if (code == kInvalidBaseCode) {
                 return makeError<RawStreamSizes>(ErrorCode::kUsageError,
                                                  "invalid logical FASTQ record");
             }
-            bool exceptional = false;
-            (void)baseCode(record.sequence[position], exceptional);
-            if (exceptional) {
+            if (code == kExceptionalBaseCode) {
                 const auto delta = exceptionCount == 0 ? position : position - previous;
                 if (!checkedAdd(sizes.sequences, varintSize(delta) + 1)) {
                     return makeError<RawStreamSizes>(ErrorCode::kUsageError,
@@ -455,9 +468,12 @@ struct RawStreamSizes {
     return sizes;
 }
 
+/// Frame-local peak, excluding the process-wide `kCodecMemoryReserveBytes`.
+/// Callers combine it with the global reserve and the in-flight frame window;
+/// see ArchiveEngine's frame-budget derivation.
 [[nodiscard]] auto estimateCompressionPeak(std::span<const ReadRecord> records,
                                            const RawStreamSizes& sizes) -> Result<std::size_t> {
-    std::size_t peak = kCodecMemoryReserve;
+    std::size_t peak = 0;
     if (records.size() > std::numeric_limits<std::size_t>::max() / (sizeof(ReadRecord) * 2) ||
         !checkedAdd(peak, records.size() * sizeof(ReadRecord) * 2)) {
         return makeError<std::size_t>(ErrorCode::kUsageError,
@@ -564,7 +580,8 @@ struct RawStreamSizes {
                                              std::size_t rawQualities,
                                              std::size_t qualities,
                                              std::size_t recordCount) -> Result<std::size_t> {
-    std::size_t peak = kCodecMemoryReserve;
+    // Frame-local peak; the global reserve is counted once by the caller.
+    std::size_t peak = 0;
     if (recordCount > std::numeric_limits<std::size_t>::max() / (sizeof(ReadRecord) * 2) ||
         !checkedAdd(peak, recordCount * sizeof(ReadRecord) * 2)) {
         return makeError<std::size_t>(ErrorCode::kFormatError,
@@ -577,6 +594,19 @@ struct RawStreamSizes {
             return makeError<std::size_t>(ErrorCode::kFormatError,
                                           "FQC v2 frame memory estimate overflow");
         }
+    }
+    // decodeRawStreams 会把原始流复制进 ReadRecord 的字符串：
+    // id/comment 与 quality 各约一倍 raw 大小，序列是 2-bit 打包，解码后约 4 倍。
+    constexpr std::size_t kPackedSequenceExpansion = 4;
+    if (rawSequences > std::numeric_limits<std::size_t>::max() / kPackedSequenceExpansion) {
+        return makeError<std::size_t>(ErrorCode::kFormatError,
+                                      "FQC v2 frame memory estimate overflow");
+    }
+    const std::size_t expandedSequences = rawSequences * kPackedSequenceExpansion;
+    if (!checkedAdd(peak, rawIds) || !checkedAdd(peak, expandedSequences) ||
+        !checkedAdd(peak, rawQualities)) {
+        return makeError<std::size_t>(ErrorCode::kFormatError,
+                                      "FQC v2 frame memory estimate overflow");
     }
     for (const auto encodedSize : {ids, sequences, qualities}) {
         if (!checkedAdd(peak, encodedSize)) {
@@ -636,7 +666,12 @@ auto encodeFrame(std::span<const ReadRecord> records,
         return makeError<std::unique_ptr<EncodedFrame>>(peakMemory.error().code,
                                                         peakMemory.error().message);
     }
-    if (*peakMemory > options.memoryLimitBytes) {
+    if (*peakMemory > options.maxFrameBytes) {
+        return makeError<std::unique_ptr<EncodedFrame>>(
+            ErrorCode::kUsageError, "FQC v2 frame exceeds configured frame budget");
+    }
+    if (options.memoryLimitBytes <= kCodecMemoryReserveBytes ||
+        *peakMemory > options.memoryLimitBytes - kCodecMemoryReserveBytes) {
         return makeError<std::unique_ptr<EncodedFrame>>(
             ErrorCode::kUsageError, "FQC v2 frame exceeds configured memory limit");
     }
@@ -757,7 +792,7 @@ auto ArchiveWriter::ensureHeader() -> VoidResult {
     if (headerWritten_) {
         return {};
     }
-    if (options_.maxFrameBytes == 0 || options_.memoryLimitBytes <= kCodecMemoryReserve) {
+    if (options_.maxFrameBytes == 0 || options_.memoryLimitBytes <= kCodecMemoryReserveBytes) {
         return makeVoidError(ErrorCode::kUsageError,
                              "FQC v2 frame and memory limits must be positive");
     }
@@ -886,7 +921,7 @@ auto ArchiveReader::open() -> Result<ArchiveMetadata> {
     if (opened_) {
         return metadata_;
     }
-    if (maxFrameBytes_ == 0 || memoryLimitBytes_ <= kCodecMemoryReserve) {
+    if (maxFrameBytes_ == 0 || memoryLimitBytes_ <= kCodecMemoryReserveBytes) {
         return makeError<ArchiveMetadata>(ErrorCode::kUsageError,
                                           "FQC v2 frame and memory limits must be positive");
     }
@@ -1106,7 +1141,12 @@ auto ArchiveReader::readRawFrame() -> Result<std::optional<RawFrame>> {
     if (!peakMemory) {
         return makeError<std::optional<RawFrame>>(peakMemory.error());
     }
-    if (*peakMemory > memoryLimitBytes_) {
+    if (*peakMemory > maxFrameBytes_) {
+        return makeError<std::optional<RawFrame>>(ErrorCode::kFormatError,
+                                                  "FQC v2 frame exceeds configured frame budget");
+    }
+    if (memoryLimitBytes_ <= kCodecMemoryReserveBytes ||
+        *peakMemory > memoryLimitBytes_ - kCodecMemoryReserveBytes) {
         return makeError<std::optional<RawFrame>>(ErrorCode::kFormatError,
                                                   "FQC v2 frame exceeds configured memory limit");
     }

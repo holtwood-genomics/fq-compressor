@@ -73,11 +73,162 @@
 
 ### 改进
 
+- **归档字节缓冲不再整块零初始化**：`fqc::ByteBuffer`
+  （`std::vector<uint8_t, NoInitAllocator<uint8_t>>`）取代裸
+  `std::vector<std::uint8_t>`，用于 `RawFrame` / `DecodedBuffer` /
+  `CompressedFrame` 的载荷与 `CompressedStream` 的解压输出缓冲。这些缓冲
+  `resize(n)` 之后立刻被 `readExact` / `ZSTD_decompress` 整块覆盖，
+  `vector::resize` 的值初始化（整块 memset）纯属浪费；实测约 8 ms/GiB
+  （64 KiB 块）～30 ms/GiB（4 MiB 块）。分配器只把无参构造变成空操作，带参构造
+  仍是真实构造，`assign`/`insert`/`push_back`/`resize(n, v)` 语义不变。
+  **兼容性**：`RawFrame`/`CompressedFrame` 字段类型由
+  `std::vector<std::uint8_t>` 变为 `ByteBuffer`，绑定到 `std::vector<uint8_t>&`
+  的外部代码需同步改型；`.data()`/`.size()` 等用法不受影响。归档格式不变。
+
+- **解码管线预算构造收口**：`decompress` 与 `verify` 共用
+  `makeDecompressPipeline`，解码 worker 数归一、同存帧预算和逐帧上限只推导一次；
+  行为不变。
+
+- **FASTQ 行读取错误收敛**：`FastqParser` 新增 `readLineChecked`，把
+  "超长行 / 底层流错误 / 干净 EOF" 的重复分支收敛为一个 `Result<bool>` 契约；
+  `readRecord` 与 `readRequiredLine` 只保留各自的 EOF 语义。错误文本统一带行号，
+  解析行为不变。
+
+- **帧提交与遥测快照收口**：`pushWithCredit` 统一"取 credit -> push -> push
+  失败归还"的 source 逻辑（含并行解析的 owner 变体）；`makeTelemetry` 统一三条
+  流水线的 timings / queue stats / in-flight 高水位快照。新增 4 个 limiter 单测
+  覆盖取消、普通/owner 失败归还与成功路径。行为、帧顺序与归档字节不变 → 详见
+  `.agents/notes/implemented/architecture/2026-11-06-frame-submit-and-telemetry.md`
+
+- **realistic 基准刷新**：用聚合内存预算修复后的 `513b9f9` 重跑 512/1024 MiB
+  realistic 基准，归档到 `perf-baselines/2026-11-06-realistic-64mib/`；README 性能表
+  与 `docs/benchmarks.md` 改为当前绝对 baseline。旧 2026-11-05 归档保留为历史，
+  不同运行窗口不可横比，尤其不能把数字差异归因于代码。
+
+- **流水线结果与遥测统一**：`CompressPipeline` / `ParallelParsePipeline` /
+  `DecompressPipeline` 共用 `PipelineRunStats`（canonical `ArchiveStats` + 阶段计时 +
+  队列快照 + in-flight 高水位 + `logicalBytes`），删除命令层的 `toArchiveStats` 翻译；
+  `decompress` / `verify` 也输出与压缩对称的分段计时。压缩 `run` 成功时负责写 footer
+  并 flush，使 `archive.encodedBytes` 是完整归档快照。归档字节布局不变 → 详见
+  `.agents/notes/implemented/architecture/2026-11-06-unified-pipeline-results-and-telemetry.md`
+
+- **共享 worker stage**：三条流水线的 `pop -> handler -> push` 循环、首个错误记录、取消请求、
+  异常屏障和 worker 本地计时合并收敛到 `pipeline::startWorkerStage`，删除约 130 行重复控制流。
+  helper 不接管队列关闭、线程 join 顺序或 reader/writer 生命周期，也不引入通用 DAG；
+  输入/输出队列容量独立推导，并新增直接契约测试（成功、错误、异常、stop、计时）。
+  归档格式与帧顺序不变，单帧与 8 帧归档均通过改动前后逐字节 `cmp` → 详见
+  `.agents/notes/implemented/architecture/2026-11-06-shared-worker-stage.md`
+
+- **共享异常屏障**：reader / writer / parser 线程的 6 处 `try/catch` 收敛到
+  `pipeline::runGuarded` / `recordGuardedError`，统一“首个错误 + request_stop”；
+  worker stage 的异常路径复用同一实现。原 reader/writer 的 catch 会覆盖循环内已记录的
+  具体错误，现在每个错误槽只保留首个失败；归档格式不变。
+
+- **全流水线唯一首个错误槽**：压缩、并行解析和解压三条流水线不再各自维护
+  `readerError` / `encoderError` / `writerError` 并按固定阶段优先级返回，而是共享一个
+  `firstError`。所有阶段只在错误路径上通过同一把锁写入，先失败者保留，后续级联失败不
+  覆盖根因；正常路径无锁。三条流水线共删除 6 个错误槽和 3 组优先级分支，归档格式与
+  成功路径行为不变。→ 详见
+  `.agents/notes/implemented/simplification/2026-11-06-single-pipeline-error-slot.md`
+
+- **遥测字段语义化**：`queue1Stats` / `queue2Stats` 改为 `inputQueueStats` /
+  `outputQueueStats`，`workerWorkNs` 改为 `workerPrimaryNs`；日志同步使用
+  input/output，避免读者记住队列方向。归档格式不变。
+
+- **ARM64（AArch64）构建适配**：Release 的 native 调优在 aarch64 改用
+  `-mcpu=native`（clang 的 `-march=native` 在 ARM 上只映射到 `generic`）；新增
+  `conan/profiles/clang-armv8` 与构建文档；decompress/verify 新增
+  `--decode-workers`（0 = 默认 4），便于多核 ARM 独立调节解码并行度 → 详见
+  `.agents/notes/implemented/architecture/2026-10-27-arm64-adaptation.md`
+
+- **2-bit 打包热循环优化**：改为 256 字节查表 + 每 4 碱基无分支展开，避免 clang
+  在 ARM 上因 switch 无法向量化。1 GiB illumina、`--parse-workers 12` 从约
+  331 提升到约 419 MiB/s（同机 A/B，+27%）；归档格式与压缩比不变。
+
+- **parser 行缓冲复用**：`FastqParser` 复用 header/`+` 行的临时 `std::string` 容量，
+  减少每条记录两次短命分配；parser 由单线程独占，无需加锁。
+- **realistic benchmark 默认**：`FQC_PERF_DATA` 默认从 `structured` 改为 `realistic`
+  （Illumina-like 位置相关质量、ONT-like 宽质量分布）；`structured`/`random` 保留为
+  压力 fixture。旧 `2026-08-30` baseline 已标注为 structured 压力数据，
+  1051×/1204×/11419× 压缩比不能与真实语料横比。新增 512/1024 MiB realistic
+  正式 baseline（`perf-baselines/2026-11-05-realistic/`），含原始 JSONL、极差与 RSS。
+- **benchmark 工具修正**：realistic Illumina header 改为标准 7 段，header 字节估算按
+  短/长读区分；未知 `FQC_PERF_DATA` 显式报错；小尺寸 JSON 数字补前导零、计时下限
+  0.01s 避免除零；`bench.sh` 归档说明不再覆盖手工内容，并记录 CPU 型号、编译器版本
+  与源码 dirty 标记。
+- **标准流关闭 C stdio 同步**：CLI 启动时 `std::ios::sync_with_stdio(false)`，
+  减少 stdin/stdout 路径上的逐字符锁；`std::ofstream` 不受影响，日志仍走 stderr。
+
 - 并行解析的 parser 扇出与 encoder 池解耦：encoder 数量采用 `min(K, 4)`，避免提高
   `--parse-workers` 时机械地成倍创建 CPU 编码线程 → 详见
   `docs/postmortems/2026-09-21-worker-topology.md`
 
 ### 修复
+
+- **`scripts/test.sh` 零匹配过滤器静默全绿**：GTest 对零匹配的
+  `--gtest_filter` 返回成功，pattern 拼错时整轮测试一条用例都没跑却是绿的。
+  脚本现在先用各 `*_test` 的 `--gtest_list_tests` 确认过滤器至少命中一条用例，
+  否则以退出码 1 报错并提示检查拼写。
+
+- **超长 FASTQ 行在分配后才发现**：`FastqParser` 原先用 `std::getline(string)`
+  读完整行再检查长度，gzip 解压出的恶意超长行可绕过 `--memory-limit` 打满内存。
+  改为 64 KiB 固定缓冲分块扫描，超过上限立即排空并返回格式错误；新增跨块边界
+  的拒绝/接受回归。分块实现同时修正 EOF 判定：`getline` 读到 EOF 但已取到字符时
+  只置 eofbit、不置 failbit，原实现把它当成分隔符会吃掉最后一行的末字符，导致
+  无尾随换行的合法记录被截断。
+- **解码帧内存预检漏计记录字符串与序列 4:1 展开**：`estimateDecompressionPeak`
+  只累计原始流与压缩流，未计 `decodeRawStreams` 复制进 `ReadRecord` 的 id/quality
+  以及 2-bit 序列解码后的约 4 倍字符串；伪造帧可让 `readRawFrame` 的预检通过后
+  实际分配数倍内存。估算现在在 raw 流之外再计入解码副本
+  `rawIds + 4 × rawSequences + rawQualities`；`HigherQualityLevel...` 回归的
+  测试预算随真实峰值调整为 8 MiB。
+- **fuzz harness 的 8 MiB 预算永远无法解析归档**：`memoryLimitBytes` 必须大于
+  `kCodecMemoryReserveBytes`（16 MiB），否则所有帧在预算检查处被拒；改为
+  `16 MiB + 8 MiB`。
+- **Release workflow 权限过大**：workflow 级 `contents: write` 改为 `read`，
+  只有 release job 持有写权限。
+
+- **Release 工作流取件路径与构建 preset 不一致**：`.github/workflows/release.yml` 用
+  `clang-release-portable` 构建，却仍从 `build/clang-release` 取二进制，打 `v*` tag 时
+  sanity 与产物暂存必然失败。改为由 job 级 `PRESET` 变量推导构建目录与产物路径；
+  发布资产同时附带 `LICENSE` 与静态链接依赖的许可证声明 `THIRD_PARTY_NOTICES.md`。
+
+- **并行对齐不再把块边界处的 `'@'` 质量行误判为畸形记录头**：块边界正好落在上一
+  记录以 `@` 开头（Phred+33 Q31）的质量行首或其前导 `\n` 时，对齐扫描的
+  `partialFirstChar` 为空，合法数据被当畸形头返回，worker 的 parser 报
+  `invalid FASTQ at line 3: expected '+'`；对称地，边界落在 header 行内部时残段
+  可行性把已判定为质量行的 `@I` 行剔除，使合法的 `[seq, '+', qual]` 残段退化成
+  `[seq, '+']`，报 `no valid FASTQ record starts`。修复：用窗口首行前的字节几何
+  （裸 `+` 行，兼容 CRLF）补全 `p==0` 的质量行判定；残段可行性改为计入物理存在
+  的 skipped 行。新增 2 个单测 + 2 个集成回归（70 B/K=3、78 B/K=4 精确命中两种
+  几何）。→ 详见
+  `.agents/notes/implemented/bug-fix/2026-11-08-parallel-alignment-at-quality-boundary.md`
+- **非裸 `+` 行不再被静默改写**：`FastqParser` 此前接受 `+id` / `+desc` 等带内容的
+  `+` 行，但归档只保存 ID/sequence/quality，解压固定输出裸 `+`，合法 LF-only
+  输入的往返结果被静默改写。现在带内容的 `+` 行返回 `kFormatError`，错误文本说明
+  归档不保存该字段；README / ALGORITHM 的无损边界同步列出该限制。新增
+  `FastqParserTest.RejectsNonBarePlusLine`。→ 详见
+  `.agents/notes/implemented/bug-fix/2026-11-08-non-bare-plus-line.md`
+- **低内存预算下的聚合峰值超限（64 MiB 不是硬上限）**：`--memory-limit 64` 下实测
+  顺序压缩 / 4 parser / 8 parser / 解压峰值 RSS 为 71.8 / 133.5 / 200.5 / 92.5 MiB。
+  根因有三处：16 MiB 编解码器/运行时预留被逐帧重复计入；单帧峰值检查用的是整机预算，
+  没有按最大同存帧数分摊；采样只按碱基限流且在整个流水线期间常驻。修复：峰值估算改为
+  帧本地（全局预留只计一次）；逐帧预算按
+  `2×(队列深度-1) + in-flight worker 数 + 源端本地帧数` 分摊。并行解析的预算窗口
+  取 `max(K,4)`：K>=4 为 `6+2K`，与 `InFlightLimiter` 实际容量一致；K=1 与顺序路径
+  同预算，保证 `--parse-workers 0/1` 在低内存下归档逐字节一致；K=2/3 略保守。采样
+  按实际持有字节限流，并采用“先加入、后停止”避免消费后丢弃。默认 16 GiB、默认
+  并行度下目标帧与归档逐字节不变；64 MiB 下实测顺序约 18.5 MiB、K=4 约 25.8 MiB、
+  K=8 约 27–28 MiB、解压（顺序归档）约 21 MiB，round-trip 与 verify 通过。新增
+  `SequentialAndSingleParserFrameIdenticallyAt64MiB` 回归测试。**兼容性边界**：归档
+  帧大小与压缩预算相关，解码预算需覆盖帧峰值；新版 16 GiB 归档在 64 MiB 下会被拒，
+  旧版 64 MiB 归档在新版下约需 101 MiB（128 MiB 实测 round-trip 通过）。格式不变，
+  提高 `--memory-limit` 即可读取。→ 详见
+  `.agents/notes/implemented/bug-fix/2026-11-06-aggregate-memory-budget.md`
+
+- **输出路径探测不再抛异常**：`validateOutput` 改用
+  `std::filesystem::exists(path, error_code)`；权限不足等文件系统错误现在返回
+  `kIOError`（退出码 2），不再落入 unexpected error（退出码 3）。
 
 - **头部尾随空格静默丢失（无损硬约束违背）**：`@id `（恰一个尾随空格）往返时丢字节。
   根因：`FastqParser` 按首个空格把头部切成 id/comment 时丢弃了分隔空格本身，comment 为空时
@@ -90,17 +241,10 @@
 - **并行解析块边界对齐误匹配 `'@'` → 幻影记录注入（静默数据损坏）**：块边界落在头部行中段且
   该处恰为 `'@'` 时，`findFirstRecordStart` 会把行尾残段误判为记录起点，注入一条截断头部的幻影
   记录；归档校验和自洽，`verify`/解压全部通过。修复：候选命中必须处于**真正的行首**（前一字节
-  为 `
-` 或文件起始），残段直接跳过。质量行以 `'@'` 起始（Q31）仍安全，不受影响。
+  为 `\n` 或文件起始），残段直接跳过。质量行以 `'@'` 起始（Q31）仍安全，不受影响。
 
-- **`trimTrailingCr` 剥离所有尾随 `
-`**：改为只剥离与 `
-` 成对的单个 CRLF 行尾 `
-`；数据中
-  真实存在的尾随 `
-`（如 `SEQ
-
-`）保留一个，encode 阶段以"无效逻辑记录"响亮拒绝而非静默
+- **`trimTrailingCr` 剥离所有尾随 `\r`**：改为只剥离与 `\r\n` 成对的单个 CRLF 行尾 `\r`；数据中
+  真实存在的尾随 `\r`（如 `SEQ\r\n\r\n`）保留一个，encode 阶段以"无效逻辑记录"响亮拒绝而非静默
   篡改（fail-closed）。
 
 - **归档读取把底层 I/O 错误伪装成格式错误**：`readExact` 在 `badbit`（如损坏的 gzip 成员）时
@@ -120,6 +264,22 @@
   新增跨阶段 in-flight credit 窗口，覆盖队列、worker 和保序等待区；并行解析为每个 chunk 保留一个
   专属 credit，避免后续 chunk 抢占全部窗口导致前置 chunk 环形等待。→ 详见
   [docs/postmortems/2026-09-21-inflight-reorder-window.md](docs/postmortems/2026-09-21-inflight-reorder-window.md)
+
+### 构建
+
+- **Release workflow 的第三方 Action 固定到 commit SHA**：`checkout`、
+  `ccache-action`、`action-gh-release` 由可移动 tag 改为 40 位 SHA（保留
+  版本注释），避免 tag 被重指后以 `contents: write` 权限执行未审计代码；
+  版本更新仍由现有 Dependabot 的 github-actions 规则提 PR。
+
+- **fuzz 预设与 libc++ 混链的误导性链接错误**：libFuzzer 预编译运行时按
+  libstdc++ 构建，与默认 `clang-base` 的 `-stdlib=libc++` 混链会报
+  `std::__cxx11::basic_string...` 未定义符号。`tests/CMakeLists.txt` 在
+  `FQC_BUILD_FUZZERS` 分支增加配置期守卫，检测到 libc++ 时直接给出正确的
+  `conan install -s compiler.libcxx=libstdc++11` 与构建命令。
+  使用 libstdc++ 的 Conan 工具链已在本机实跑两个 harness（40 秒 + 修复后
+  25 秒两轮，无崩溃），步骤记入
+  `.agents/notes/implemented/process/2026-11-08-fuzzer-libstdcxx-toolchain.md`。
 
 ### 文档
 

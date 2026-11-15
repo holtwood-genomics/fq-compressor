@@ -61,6 +61,9 @@ public:
 
 private:
     [[nodiscard]] auto readLine(std::string& line) -> bool;
+    /// Read one physical line, distinguishing clean EOF (`false`) from a
+    /// malformed line or an underlying stream failure (an error).
+    [[nodiscard]] auto readLineChecked(std::string& line) -> Result<bool>;
     /// Fail with `kIOError` on stream failure, `kFormatError` on unexpected EOF
     /// or on a line exceeding `maxLineBytes_`.
     [[nodiscard]] auto readRequiredLine(std::string& line) -> VoidResult;
@@ -79,6 +82,11 @@ private:
     /// Set when a read line exceeded `maxLineBytes_`; the next readRecord
     /// surfaces it as `kFormatError` instead of treating the line as EOF.
     bool lineTooLong_ = false;
+    /// Per-parser scratch buffers. Reusing them keeps the header and '+' line
+    /// capacity across records instead of allocating two fresh strings per
+    /// record; a parser is owned by one reader/worker thread, so this is safe.
+    std::string idLine_;
+    std::string plusLine_;
 };
 
 /// One pair of reads; `second` is empty in single-end mode.

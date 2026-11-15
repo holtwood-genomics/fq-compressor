@@ -21,6 +21,17 @@ constexpr std::string_view kShortFastq =
     "@short_1 1:N:0:ACGT\nACGTNacgt\n+\n!#IJKLMNO\n"
     "@short_2 2:N:0:TGCA\nTGCARYSWK\n+\nJKLMNOPQR\n";
 
+[[nodiscard]] auto makeShortFastq(int recordCount) -> std::string {
+    std::string input;
+    input.reserve(static_cast<std::size_t>(recordCount) * 320);
+    for (int i = 0; i < recordCount; ++i) {
+        input += "@read" + std::to_string(i) + "\n";
+        input += std::string(150, 'A') + "\n+\n";
+        input += std::string(150, 'I') + "\n";
+    }
+    return input;
+}
+
 [[nodiscard]] auto profileOf(std::string_view id,
                              std::string_view comment,
                              std::size_t bases) -> Result<format::DatasetProfile> {
@@ -60,6 +71,33 @@ TEST_F(ArchiveEngineTest, CompressesAndDecompressesCanonicalFastq) {
     auto verified = engine.verify(temp_.path() / "reads.fqc", 64 * 1024 * 1024);
     ASSERT_TRUE(verified);
     EXPECT_EQ(verified->recordCount, 2U);
+}
+
+TEST_F(ArchiveEngineTest, DecoderWorkerOverridePreservesRoundTrip) {
+    temp_.writeFile("reads.fastq", kShortFastq);
+    ArchiveEngine engine;
+
+    auto compressed = engine.compress({.inputPath = temp_.path() / "reads.fastq",
+                                       .matePath = {},
+                                       .outputPath = temp_.path() / "reads.fqc",
+                                       .profile = format::DatasetProfile::kIllumina,
+                                       .memoryLimitBytes = 64 * 1024 * 1024,
+                                       .targetFrameBytes = 1,
+                                       .forceOverwrite = true});
+    ASSERT_TRUE(compressed) << compressed.error().message;
+    EXPECT_GE(compressed->frameCount, 2U);
+
+    auto decompressed = engine.decompress({.inputPath = temp_.path() / "reads.fqc",
+                                           .outputPath = temp_.path() / "restored-2.fastq",
+                                           .memoryLimitBytes = 64 * 1024 * 1024,
+                                           .decoderWorkers = 2,
+                                           .forceOverwrite = true});
+    ASSERT_TRUE(decompressed) << decompressed.error().message;
+    EXPECT_EQ(temp_.readFile("restored-2.fastq"), kShortFastq);
+
+    auto verified = engine.verify(temp_.path() / "reads.fqc", 64 * 1024 * 1024, 2);
+    ASSERT_TRUE(verified) << verified.error().message;
+    EXPECT_EQ(verified->recordCount, compressed->recordCount);
 }
 
 TEST_F(ArchiveEngineTest, InterleavesPairedFilesAndKeepsPairsAtomic) {
@@ -169,6 +207,56 @@ TEST_F(ArchiveEngineTest, RoundTripsHeaderWithTrailingSpaceByteIdentically) {
                                            .forceOverwrite = true});
     ASSERT_TRUE(decompressed) << decompressed.error().message;
     EXPECT_EQ(temp_.readFile("ts.out.fastq"), input);
+}
+
+// The 64 MiB sample budget stops the profile sample before EOF. The sample
+// boundary must not consume a record and then discard it: the pipeline resumes
+// at the last record actually retained. This input is large enough to cross the
+// held-bytes sample budget with 150 bp records.
+TEST_F(ArchiveEngineTest, SampleBoundaryPreservesAllRecordsAt64MiB) {
+    constexpr int kRecordCount = 20'000;
+    const std::string input = makeShortFastq(kRecordCount);
+    temp_.writeFile("sample-boundary.fastq", input);
+
+    ArchiveEngine engine;
+    auto compressed = engine.compress({.inputPath = temp_.path() / "sample-boundary.fastq",
+                                       .matePath = {},
+                                       .outputPath = temp_.path() / "sample-boundary.fqc",
+                                       .profile = format::DatasetProfile::kIllumina,
+                                       .memoryLimitBytes = 64 * 1024 * 1024,
+                                       .forceOverwrite = true});
+    ASSERT_TRUE(compressed) << compressed.error().message;
+    EXPECT_EQ(compressed->recordCount, static_cast<std::uint64_t>(kRecordCount));
+
+    auto decompressed = engine.decompress({.inputPath = temp_.path() / "sample-boundary.fqc",
+                                           .outputPath = temp_.path() / "sample-boundary.out.fastq",
+                                           .memoryLimitBytes = 64 * 1024 * 1024,
+                                           .forceOverwrite = true});
+    ASSERT_TRUE(decompressed) << decompressed.error().message;
+    EXPECT_EQ(temp_.readFile("sample-boundary.out.fastq"), input);
+}
+
+// 64 MiB is low enough that the frame budget binds. K=1 must frame exactly
+// like the sequential reader; otherwise --parse-workers 0/1 archives diverge
+// even though both cover the same records.
+TEST_F(ArchiveEngineTest, SequentialAndSingleParserFrameIdenticallyAt64MiB) {
+    constexpr int kRecordCount = 20'000;
+    temp_.writeFile("k0-k1.fastq", makeShortFastq(kRecordCount));
+
+    ArchiveEngine engine;
+    for (const std::size_t parseWorkers : {std::size_t{0}, std::size_t{1}}) {
+        const auto output = "k0-k1-" + std::to_string(parseWorkers) + ".fqc";
+        auto compressed = engine.compress({.inputPath = temp_.path() / "k0-k1.fastq",
+                                           .matePath = {},
+                                           .outputPath = temp_.path() / output,
+                                           .profile = format::DatasetProfile::kIllumina,
+                                           .memoryLimitBytes = 64 * 1024 * 1024,
+                                           .parseWorkers = parseWorkers,
+                                           .forceOverwrite = true});
+        ASSERT_TRUE(compressed) << compressed.error().message;
+        EXPECT_EQ(compressed->recordCount, static_cast<std::uint64_t>(kRecordCount));
+    }
+    EXPECT_EQ(temp_.readFile("k0-k1-0.fqc"), temp_.readFile("k0-k1-1.fqc"));
 }
 
 // BUG-1 regression: genuine trailing \r inside sequence/quality must survive

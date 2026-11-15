@@ -1,8 +1,10 @@
 # fq-compressor
 
 把 FASTQ 压成**小而可校验**的归档：内存可控、管道友好。压缩比视数据而定——
-合成数据约 2.8–2.9×，真实语料 1.96–4.15×（详见 [性能](#性能) 与
+合成 realistic 数据约 2.6–3.4×，真实语料 1.96–4.15×（详见 [性能](#性能) 与
 [docs/real-corpus.md](docs/real-corpus.md)）。
+
+*A columnar streaming FASTQ compressor in C++23 — small and verifiable archives, bounded memory, pipe-friendly I/O.*
 
 > **格式族 `fqc-sequential/v2`**（magic `46 51 43 56 32 0D 0A 1A`，`FQCV2\r\n\x1A`）：
 > 与 [fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust)
@@ -35,7 +37,8 @@ chmod +x fqc && ./fqc --version
 > round-trip + verify 回归 sanity。
 
 **其他平台 / 从源码构建**：需 clang-18 + libc++、CMake 3.28+、Conan 2.x、Ninja，
-工具链要求与质量门禁见 [docs/building.md](docs/building.md)：
+工具链要求与质量门禁见 [docs/building.md](docs/building.md)（ARM64 / AArch64 的额外步骤
+与多核参数也在该文档）：
 
 ```bash
 git clone https://github.com/open-genomics/fq-compressor.git
@@ -71,7 +74,8 @@ FASTQ 记录的信息字段——ID、序列、质量值——按**列式分离*
 **无损边界**：字节级无损（`cmp` 逐字节一致）仅对 **LF-only 规范 FASTQ** 成立；CRLF
 输入会被静默规范化为 LF（行尾 `\r` 不参与往返），字段内容恰以单个 `\r` 结尾的 LF-only
 文件同理——该 `\r` 与 CRLF 行尾在字节流上不可区分。超长单行（> 64 MiB）与结构畸形的
-记录（缺 `+` 行、sequence/quality 长度不一致等）会以格式错误拒绝而非静默篡改。
+记录（缺 `+` 行、非裸 `+` 行如 `+id`、sequence/quality 长度不一致等）会以格式错误
+拒绝而非静默篡改。
 
 每步在压什么、端到端压缩比拆解、设计取舍：见 [ALGORITHM.md](ALGORITHM.md)。
 
@@ -84,7 +88,8 @@ FASTQ 记录的信息字段——ID、序列、质量值——按**列式分离*
 解压: reader 读帧+内存预检 →[MPMC]→ decoder×N (zstd+校验和+解码, 乱序) →[MPMC]→ reorder 保序 → 滚动校验和 → 写出
 ```
 
-* **内存有界** — 默认 16 GiB 预算、最低 64 MiB；压缩/解压各有保守峰值预检，不会 OOM。
+* **内存有界** — 默认 16 GiB 预算、最低 64 MiB；逐帧峰值按队列、in-flight 预算窗口
+  （并行解析取 `max(K, 4)`）和源端本地帧的最大同存数分摊，64 MiB 实测峰值低于预算。
 * **故障边界清晰** — 截断、未知格式/版本、校验和不匹配、内存超限一律 fail closed；
   覆盖已有输出需 `--force`。
 * **管道友好** — stdin/stdout 直通；普通文件先写临时文件，成功后原子替换。
@@ -94,16 +99,28 @@ FASTQ 记录的信息字段——ID、序列、质量值——按**列式分离*
 
 ## 性能
 
-合成数据（阶段 H A/B 同窗口，64 MiB 内存预算，随机 FASTQ ×5 次中位数）：
+> 口径：`tests/e2e/test_performance.sh` 默认 `FQC_PERF_DATA=realistic`（短读位置相关
+> 质量、长读宽质量分布）；`structured`/`random` 仅作压力 fixture。下表是当前 HEAD 的
+> **绝对 baseline**，不是优化 A/B；不同日期、机器或运行窗口的数字不可横比。
 
-| 数据 | 压缩（并行解析） | 相对顺序解析 | 压缩比 |
-|---|---:|---:|---:|
-| Illumina-like 150 bp | **148.84 MiB/s** | +47.7% | 2.96× |
-| ONT-like 20 kbp | 与顺序路径持平 | — | 2.84× |
+当前 realistic baseline（2026-11-06，commit `513b9f9`，16 GiB 预算、64 MiB 目标帧、
+4 parser、5 次中位数）：
 
-真实生物语料实测（Illumina WXS 4.15×、ONT 1.96× 等）见
-[docs/real-corpus.md](docs/real-corpus.md)；合成数据不代表真实压缩比——短读质量
-集中时更高，长读质量近满字母表时可以更低。
+| 数据 | 实际输入 | 压缩 MiB/s | 解压 MiB/s | 压缩比 | 压缩 RSS |
+|---|---:|---:|---:|---:|---:|
+| Illumina 150 bp | 502.61 MiB | 341.91 | 353.95 | 3.33× | 924 MiB |
+| Illumina 150 bp | 1005.22 MiB | 331.75 | 410.29 | 3.33× | 1 230 MiB |
+| ONT 20 kbp | 1024.03 MiB | 317.03 | 616.88 | 2.63× | 1 647 MiB |
+
+极差、原始 JSONL 与归档说明见 [docs/benchmarks.md](docs/benchmarks.md)。
+
+- 与 2026-11-05 的 247.63 / 265.82 / 135.20 MiB/s 差异较大，但运行窗口、生成器版本
+  和内存预算口径不同，不能归因于代码；同窗口 A/B 才能下结论。
+- 历史阶段 H 的 148.84 MiB/s（随机数据、旧帧预算公式）仅作历史对照，不能与当前
+  二进制或真实语料横比。
+- 真实生物语料实测（Illumina WXS 4.15×、ONT 1.96× 等）见
+  [docs/real-corpus.md](docs/real-corpus.md)；合成数据不代表真实压缩比——短读质量
+  集中时更高，长读质量近满字母表时可以更低。
 
 ## 同类工具对比
 
@@ -138,6 +155,9 @@ ID 合成 R1 为 331,553 B（53.385× raw），同样是机制验证。但 `--ma
   `fqc_ref_archive`，没有 `--max-ratio` 顶层开关、内置 mapper/BAM 或伪基因组。最终
   max-ratio（参考/伪基因组、逐字节 `+` 行/行尾/空 read 保真、参考身份 SHA-256）仍是
   设计目标（[docs/max-ratio-design.md](docs/max-ratio-design.md)）。
+* 归档帧大小与压缩时的 `--memory-limit` 相关；用显著更低的预算解码高预算生成的归档
+  可能失败（例如新版 16 GiB 归档在 64 MiB 下会被逐帧预算拒绝；旧版 64 MiB 归档在新版
+  64 MiB 下约需 101 MiB）。格式不变，提高 `--memory-limit` 即可读取。
 
 ## 文档
 
@@ -172,3 +192,15 @@ ID 合成 R1 为 331,553 B（53.385× raw），同样是机制验证。但 `--ma
 ## 许可证
 
 [MIT](LICENSE)。
+
+## 相关项目
+
+- [fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust) — 同题 Rust 实现（块索引 `.fqc`，同名不同格式族、互不兼容）
+- [fastq-tools](https://github.com/open-genomics/fastq-tools) — C++23 FASTQ 质控工具，同属组织 C++ 系统线
+- [minibwa-rust](https://github.com/open-genomics/minibwa-rust) — 短读比对器（Rust 线）
+
+<div align="center">
+
+本仓库属于 [**Open Genomics**](https://github.com/open-genomics) · 高性能生物信息学系统软件与中文知识库
+
+</div>

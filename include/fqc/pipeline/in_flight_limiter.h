@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <mutex>
 #include <stop_token>
+#include <utility>
 #include <vector>
 
 namespace fqc::pipeline {
@@ -36,16 +37,19 @@ public:
     /// Owner credits must be released in the same order they were acquired;
     /// a per-owner ordered sink naturally provides that property.
     explicit InFlightLimiter(std::size_t capacity, std::size_t reservedOwners = 0)
-        : capacity_(capacity),
-          sharedCapacity_(capacity - reservedOwners),
-          reservedInUse_(reservedOwners, false) {}
+        : kCapacity(capacity),
+          kSharedCapacity(capacity - reservedOwners),
+          reservedInUse_(reservedOwners, false) {
+        assert(capacity > 0 && "in-flight limiter: capacity must be positive");
+        assert(reservedOwners <= capacity && "in-flight limiter: reserved owners exceed capacity");
+    }
 
     InFlightLimiter(const InFlightLimiter&) = delete;
     InFlightLimiter& operator=(const InFlightLimiter&) = delete;
 
     /// Acquire one credit, or return false when cancellation is requested.
     [[nodiscard]] auto acquire(std::stop_token st = {}) -> bool {
-        return acquire(kNoOwner, st);
+        return acquire(kNoOwner, std::move(st));
     }
 
     /// Acquire one credit for `owner`, keeping one credit available to each
@@ -112,14 +116,14 @@ private:
     static constexpr std::size_t kNoOwner = static_cast<std::size_t>(-1);
 
     [[nodiscard]] auto canAcquireLocked(std::size_t owner) const -> bool {
-        return inFlight_ < capacity_ &&
+        return inFlight_ < kCapacity &&
             (owner != kNoOwner && owner < reservedInUse_.size() && !reservedInUse_[owner]
                  ? true
-                 : sharedInFlight_ < sharedCapacity_);
+                 : sharedInFlight_ < kSharedCapacity);
     }
 
-    const std::size_t capacity_;
-    const std::size_t sharedCapacity_;
+    const std::size_t kCapacity;
+    const std::size_t kSharedCapacity;
     mutable std::mutex m_;
     std::condition_variable_any cv_;
     std::size_t inFlight_ = 0;
@@ -127,5 +131,42 @@ private:
     std::size_t highWater_ = 0;
     std::vector<bool> reservedInUse_;
 };
+
+/// Acquire one credit, push `item`, and return the credit if the push is
+/// refused (cancellation or a closed queue). The caller releases the credit
+/// only after the ordered sink commits the item. Keeping these three steps
+/// together makes the failure path impossible to forget at each source.
+template <typename Queue, typename Item>
+[[nodiscard]] auto pushWithCredit(InFlightLimiter& limiter,
+                                  Queue& queue,
+                                  Item item,
+                                  std::stop_token st = {}) -> bool {
+    if (!limiter.acquire(st)) {
+        return false;
+    }
+    if (!queue.push(std::move(item), st)) {
+        limiter.release();
+        return false;
+    }
+    return true;
+}
+
+/// Owner-reserved variant used by parallel parsers: the credit belongs to
+/// `owner` and must be released with the same owner after ordered commit.
+template <typename Queue, typename Item>
+[[nodiscard]] auto pushWithCredit(InFlightLimiter& limiter,
+                                  std::size_t owner,
+                                  Queue& queue,
+                                  Item item,
+                                  std::stop_token st = {}) -> bool {
+    if (!limiter.acquire(owner, st)) {
+        return false;
+    }
+    if (!queue.push(std::move(item), st)) {
+        limiter.release(owner);
+        return false;
+    }
+    return true;
+}
 
 }  // namespace fqc::pipeline

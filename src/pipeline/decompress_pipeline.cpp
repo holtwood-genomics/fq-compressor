@@ -8,6 +8,9 @@
 #include "fqc/pipeline/in_flight_limiter.h"
 #include "fqc/pipeline/mpmc_queue.h"
 #include "fqc/pipeline/reorder_buffer.h"
+#include "fqc/pipeline/stage_guard.h"
+#include "fqc/pipeline/timing.h"
+#include "fqc/pipeline/worker_stage.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -16,8 +19,6 @@
 #include <mutex>
 #include <optional>
 #include <stop_token>
-#include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -43,13 +44,6 @@ struct OrderedFrame {
     std::unique_ptr<format::DecodedFrame> frame;
 };
 
-// 流水线 worker 的异常屏障消息。jthread 函数体逃逸的异常会直接 std::terminate
-// （main 的 catch-all 看不到线程内异常），这里统一转成 kInternalError 记录，
-// 由调用方配合 request_stop() 完成协作取消。
-[[nodiscard]] auto workerCrashError(std::string_view stage, const char* detail) -> Error {
-    return Error{ErrorCode::kInternalError, std::string(stage) + " worker terminated: " + detail};
-}
-
 }  // namespace
 
 DecompressPipeline::DecompressPipeline(std::size_t maxFrameBytes,
@@ -59,6 +53,9 @@ DecompressPipeline::DecompressPipeline(std::size_t maxFrameBytes,
       memoryLimitBytes_(memoryLimitBytes),
       parallelism_(parallelism == 0 ? 1 : parallelism) {}
 
+// reader/decoder/writer 的停止信号、队列关闭和 join 顺序属于同一生命周期，
+// 拆分反而会隐藏同步不变量；复杂度来自阶段交错本身。
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto DecompressPipeline::run(std::istream& input,
                              RecordSink sink) const -> Result<DecompressStats> {
     MpmcQueue<InputFrame, kDefaultQueueDepth> queue1;
@@ -66,18 +63,26 @@ auto DecompressPipeline::run(std::istream& input,
     const auto inFlightLimit = MpmcQueue<InputFrame, kDefaultQueueDepth>::kUsableCapacity +
         MpmcQueue<OrderedFrame, kDefaultQueueDepth>::kUsableCapacity + parallelism_;
     InFlightLimiter frameLimiter(inFlightLimit);
-    std::optional<Error> readerError;
-    std::optional<Error> decoderError;
-    std::optional<Error> writerError;
-    std::mutex decoderErrorMutex;
+    // 全流水线唯一的首个错误槽：reader / decoder / writer 都可能并发失败，
+    // 所有写入都走同一把错误锁；正常路径不加锁。只保留第一个失败。
+    std::optional<Error> firstError;
+    std::mutex errorMutex;
 
-    // Synchronization invariant (same as CompressPipeline): each shared
-    // variable below is written by exactly one worker and read by the main
-    // thread only after the matching join(), whose happens-before edge makes
-    // the access safe. The workers share no mutable state but the two queues
-    // (MPMC, thread-safe) and the stop_source.
-    DecompressStats stats;                            // writer
-    std::uint64_t finalGlobalChecksum = 0;            // writer
+    // Synchronization invariant (same as CompressPipeline): metadata,
+    // encodedBytes, footerData, readerSawFooter, stats and finalGlobalChecksum
+    // are single-writer and read only after join(). `firstError` is the one
+    // cross-stage slot; every stage writes it under `errorMutex`, so the first
+    // failure wins. Otherwise the workers share only the two queues (MPMC,
+    // thread-safe) and the stop_source.
+    DecompressStats stats;                  // writer
+    std::uint64_t finalGlobalChecksum = 0;  // writer
+
+    std::atomic<std::uint64_t> readerWorkNs{0};
+    std::atomic<std::uint64_t> readerPushNs{0};
+    WorkerStageTimingSink decoderTimings;
+    std::atomic<std::uint64_t> writerPopNs{0};
+    std::atomic<std::uint64_t> writerWorkNs{0};
+    const auto wallStart = Clock::now();
     format::ArchiveMetadata metadata;                 // reader
     std::uint64_t encodedBytes = 0;                   // reader
     std::optional<format::ArchiveFooter> footerData;  // reader
@@ -90,27 +95,33 @@ auto DecompressPipeline::run(std::istream& input,
     // decoder workers. records/bases and the rolling checksum accumulate on
     // the writer side.
     std::jthread reader([&] {
-        try {
+        std::uint64_t workNs = 0;
+        std::uint64_t pushNs = 0;
+        runGuarded("decompress reader", stopSource, firstError, errorMutex, [&] {
+            const auto openStart = Clock::now();
             format::ArchiveReader archiveReader(input, maxFrameBytes_, memoryLimitBytes_);
             auto opened = archiveReader.open();
+            workNs += nanosSince(openStart);
             if (!opened) {
-                readerError = opened.error();
+                recordGuardedError(errorMutex, firstError, opened.error());
                 stopSource.request_stop();
             } else {
                 metadata = *opened;
 
                 std::uint64_t frameId = 0;
                 while (!stopToken.stop_requested()) {
+                    const auto readStart = Clock::now();
                     auto raw = archiveReader.readRawFrame();
+                    workNs += nanosSince(readStart);
                     if (!raw) {
-                        readerError = raw.error();
+                        recordGuardedError(errorMutex, firstError, raw.error());
                         stopSource.request_stop();
                         break;
                     }
                     if (!raw->has_value()) {
                         auto footer = archiveReader.footer();
                         if (!footer) {
-                            readerError = footer.error();
+                            recordGuardedError(errorMutex, firstError, footer.error());
                             stopSource.request_stop();
                             break;
                         }
@@ -118,111 +129,89 @@ auto DecompressPipeline::run(std::istream& input,
                         readerSawFooter = true;
                         break;
                     }
-                    InputFrame in{frameId++, std::make_unique<format::RawFrame>(std::move(**raw))};
-                    if (!frameLimiter.acquire(stopToken)) {
-                        break;
-                    }
-                    if (!queue1.push(std::move(in), stopToken)) {
-                        frameLimiter.release();
+                    const auto pushStart = Clock::now();
+                    const bool pushed = pushWithCredit(
+                        frameLimiter,
+                        queue1,
+                        InputFrame{frameId++, std::make_unique<format::RawFrame>(std::move(**raw))},
+                        stopToken);
+                    pushNs += nanosSince(pushStart);
+                    if (!pushed) {
                         break;
                     }
                 }
                 encodedBytes = archiveReader.stats().encodedBytes;
             }
-        } catch (const std::exception& error) {
-            readerError = workerCrashError("decompress reader", error.what());
-            stopSource.request_stop();
-        } catch (...) {
-            readerError = workerCrashError("decompress reader", "unknown exception");
-            stopSource.request_stop();
-        }
+        });
         queue1.close();
+        readerWorkNs.store(workNs, std::memory_order_relaxed);
+        readerPushNs.store(pushNs, std::memory_order_relaxed);
     });
 
     // N decoder workers: decodeRawFrame is pure computation. Workers do not
     // close queue2; the main thread closes it after join.
-    auto decoderLoop = [&] {
-        try {
-            while (!stopToken.stop_requested()) {
-                auto in = queue1.pop(stopToken);
-                if (!in.has_value()) {
-                    break;
-                }
-                auto decoded = format::decodeRawFrame(*in->frame);
-                if (!decoded) {
-                    {
-                        const std::lock_guard lk(decoderErrorMutex);
-                        if (!decoderError) {
-                            decoderError = decoded.error();
-                        }
-                    }
-                    stopSource.request_stop();
-                    break;
-                }
-                OrderedFrame out{in->frameId,
-                                 std::make_unique<format::DecodedFrame>(std::move(*decoded))};
-                if (!queue2.push(std::move(out), stopToken)) {
-                    break;
-                }
-            }
-        } catch (const std::exception& error) {
-            const std::lock_guard lk(decoderErrorMutex);
-            if (!decoderError) {
-                decoderError = workerCrashError("decompress decoder", error.what());
-            }
-            stopSource.request_stop();
-        } catch (...) {
-            const std::lock_guard lk(decoderErrorMutex);
-            if (!decoderError) {
-                decoderError = workerCrashError("decompress decoder", "unknown exception");
-            }
-            stopSource.request_stop();
+    auto decodeWorker = [&](const InputFrame& in,
+                            WorkerStageTimings& timings) -> Result<OrderedFrame> {
+        const auto decodeStart = Clock::now();
+        auto decoded = format::decodeRawFrame(*in.frame);
+        timings.computeNs += nanosSince(decodeStart);
+        if (!decoded) {
+            return std::unexpected(std::move(decoded.error()));
         }
+        return OrderedFrame{in.frameId,
+                            std::make_unique<format::DecodedFrame>(std::move(*decoded))};
     };
-
-    std::vector<std::jthread> decoders;
-    decoders.reserve(parallelism_);
-    for (std::size_t i = 0; i < parallelism_; ++i) {
-        decoders.emplace_back(decoderLoop);
-    }
+    auto decoders = startWorkerStage(parallelism_,
+                                     queue1,
+                                     queue2,
+                                     stopToken,
+                                     stopSource,
+                                     errorMutex,
+                                     firstError,
+                                     "decompress decoder",
+                                     std::move(decodeWorker),
+                                     decoderTimings);
 
     // Writer: reorder by frameId, then accumulate stats + rolling global
     // checksum (order-dependent -- must stay on this thread) and invoke the
     // sink. A sink failure cancels the pipeline.
     std::jthread writer([&] {
-        try {
+        std::uint64_t popNs = 0;
+        std::uint64_t workNs = 0;
+        runGuarded("decompress writer", stopSource, firstError, errorMutex, [&] {
             ReorderBuffer<std::unique_ptr<format::DecodedFrame>> reorder;
             while (!stopToken.stop_requested()) {
+                const auto popStart = Clock::now();
                 auto out = queue2.pop(stopToken);
+                popNs += nanosSince(popStart);
                 if (!out.has_value()) {
                     break;
                 }
                 auto ready = reorder.submit(out->frameId, std::move(out->frame));
                 for (auto& frame : ready) {
-                    stats.frameCount += 1;
-                    stats.recordCount += frame->recordCount;
-                    stats.totalBases += frame->totalBases;
+                    const auto workStart = Clock::now();
+                    stats.archive.frameCount += 1;
+                    stats.archive.recordCount += frame->recordCount;
+                    stats.archive.totalBases += frame->totalBases;
+                    for (const auto& record : frame->records) {
+                        stats.logicalBytes += canonicalFastqBytes(record);
+                    }
                     finalGlobalChecksum =
                         format::advanceGlobalChecksum(finalGlobalChecksum, frame->checksum);
                     auto sinkResult = sink(std::move(frame->records));
+                    workNs += nanosSince(workStart);
                     frameLimiter.release();
                     if (!sinkResult) {
-                        writerError = sinkResult.error();
+                        recordGuardedError(errorMutex, firstError, sinkResult.error());
                         stopSource.request_stop();
-                        break;
+                        return;
                     }
                 }
-                if (writerError.has_value()) {
-                    break;
-                }
+                // 其它阶段失败时 stopToken 已请求，下一轮 while 条件会退出。
             }
-        } catch (const std::exception& error) {
-            writerError = workerCrashError("decompress writer", error.what());
-            stopSource.request_stop();
-        } catch (...) {
-            writerError = workerCrashError("decompress writer", "unknown exception");
-            stopSource.request_stop();
-        }
+        });
+        writerPopNs.store(popNs, std::memory_order_relaxed);
+        writerWorkNs.store(workNs, std::memory_order_relaxed);
     });
 
     reader.join();
@@ -234,16 +223,24 @@ auto DecompressPipeline::run(std::istream& input,
     queue2.close();
     writer.join();
 
-    stats.inFlightHighWater = frameLimiter.highWater();
+    stats.telemetry = makeTelemetry(
+        {
+            .readerWorkNs = readerWorkNs.load(std::memory_order_relaxed),
+            .readerPushNs = readerPushNs.load(std::memory_order_relaxed),
+            .workerPopNs = decoderTimings.popNs.load(std::memory_order_relaxed),
+            .workerPrimaryNs = decoderTimings.computeNs.load(std::memory_order_relaxed),
+            .workerSecondaryNs = 0,
+            .workerPushNs = decoderTimings.pushNs.load(std::memory_order_relaxed),
+            .writerPopNs = writerPopNs.load(std::memory_order_relaxed),
+            .writerWorkNs = writerWorkNs.load(std::memory_order_relaxed),
+            .wallNs = nanosSince(wallStart),
+        },
+        queue1,
+        queue2,
+        frameLimiter);
 
-    if (writerError.has_value()) {
-        return makeError<DecompressStats>(std::move(*writerError));
-    }
-    if (decoderError.has_value()) {
-        return makeError<DecompressStats>(std::move(*decoderError));
-    }
-    if (readerError.has_value()) {
-        return makeError<DecompressStats>(std::move(*readerError));
+    if (firstError.has_value()) {
+        return makeError<DecompressStats>(std::move(*firstError));
     }
     if (!readerSawFooter) {
         // A clean run can only end at the footer; anything else means the
@@ -255,9 +252,9 @@ auto DecompressPipeline::run(std::istream& input,
     // Footer validation: totals and the rolling global checksum are checked
     // against the writer side's accumulated (in-order) values -- same
     // strictness as the sequential ArchiveReader path.
-    if (footerData->frameCount != stats.frameCount ||
-        footerData->recordCount != stats.recordCount ||
-        footerData->totalBases != stats.totalBases) {
+    if (footerData->frameCount != stats.archive.frameCount ||
+        footerData->recordCount != stats.archive.recordCount ||
+        footerData->totalBases != stats.archive.totalBases) {
         return makeError<DecompressStats>(ErrorCode::kFormatError, "FQC v2 footer totals disagree");
     }
     if (footerData->globalChecksum != finalGlobalChecksum) {
@@ -266,7 +263,8 @@ auto DecompressPipeline::run(std::istream& input,
     }
 
     stats.metadata = metadata;
-    stats.encodedBytes = encodedBytes;
+    stats.archive.encodedBytes = encodedBytes;
+    stats.decoderWorkers = parallelism_;
     return stats;
 }
 

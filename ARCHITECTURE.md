@@ -88,16 +88,33 @@ CLI 默认预算 16 GiB，最低支持 64 MiB。编解码器不写临时文件�
 
 压缩侧有三道防线：
 
-1. Profile 采样有字节数和记录数双重上限。
+1. Profile 采样按持有字节和记录数双重限流；采样在流水线期间常驻，因此先从未预留预算中扣除。
 2. 帧累积器按保留记录字符串的实际容量计入开销，达到请求目标或预算推导目标中较小者时关帧。
-3. 编码前，写入器精确测量所有原始流大小，加上保留记录容量、Zstd 输出上界、vector 元数据
-   和固定的编解码器/运行时预留，保守峰值超出操作预算的帧直接拒绝。
+3. 编码前，写入器精确测量帧本地峰值（记录容量 + 原始流 + Zstd 输出上界 + vector 元数据）；
+   超出逐帧预算的帧直接拒绝。
 
-解压侧同样校验每个原始/编码大小，并额外校验聚合保守峰值：编码字节 + 两份原始逻辑字节 +
-解码记录元数据 + 运行时预留。这样，即使恶意头部让三路流各自看起来合法，总和也过不了预算关。
+解压侧同样校验每个原始/编码大小，并检查帧本地解码峰值。
 
-最大帧大小 = `(内存限制 - 运行时预留) / 4`；累积目标用 `/ 8`。在 64 MiB 限制下，发布流程实测
-RSS 为 25–32 MiB（随机化短读长和长读长 fixture）。
+内存预算按最大同存帧数分摊，而不是只按单帧计算：
+
+```text
+maxBufferedFrames = 2 × (queueDepth - 1) + inFlightWorkers + sourceLocalFrames
+逐帧峰值预算 = (内存限制 - 16 MiB 运行时预留 - 采样持有字节) / maxBufferedFrames
+累积目标 = min(用户目标, 逐帧峰值预算 / 4)
+```
+
+`sourceLocalFrames` 在顺序压缩/解压为 1，在并行解析为 parser 数 K；它尚未进入
+InFlightLimiter，必须显式计入。`inFlightWorkers` 顺序压缩为 encoder 数，并行解析为
+`max(K, 4)`，解压为 decoder 数。并行解析的实际窗口是 `6 + K`，加上每个 parser 等待
+credit 的一帧，结构上最多 `6 + 2K`；预算取 `6 + max(K,4) + K`，K>=4 与实际一致，
+K=1 与顺序路径同预算（保证 `--parse-workers 0/1` 归档一致），K=2/3 略保守。
+16 MiB 的编解码器/运行时预留只计一次，不再乘到每一帧上。
+默认 16 GiB、默认并行度下逐帧上限仍为 512 MiB、目标帧仍为 64 MiB；64 MiB 下目标帧
+会缩到约 0.5–1 MiB。
+实测 64 MiB 预算、316 MB / 1M reads 输入：顺序压缩约 18.5 MiB、K=4 约 25.8 MiB、
+K=8 约 27–28 MiB、解压约 21 MiB（顺序归档），均低于预算。兼容性边界：归档帧大小
+与压缩预算相关，解码预算需覆盖帧峰值；新版 16 GiB 归档在 64 MiB 下会被拒，旧版
+64 MiB 归档在新版下约需 101 MiB。归档格式不变，提高 `--memory-limit` 即可读取。
 
 ## 执行架构
 
@@ -120,7 +137,26 @@ encoder 状态帧内局部，worker 间无需共享可变状态。profile 采样
 `ArchiveReader::readFrame` 保留为组合 API（readRawFrame + decodeRawFrame + 顺序累积），行为
 不变。
 
-在 8 核 x86_64 WSL2 主机上，64 MiB 随机短读压缩约 149 MiB/s（相对顺序解析 +47.7%）；
+三条流水线共用同一结果模型 `pipeline::PipelineRunStats`：`metadata`、`archive`（直接复用
+`ArchiveWriter` / `ArchiveReader` 的 `ArchiveStats`）、`telemetry`（阶段计时、两条队列计数、
+in-flight 高水位）和 `logicalBytes`（规范 FASTQ 字节数）。压缩 `run` 成功时会写完 footer
+并 flush，因此 `archive.encodedBytes` 是完整归档的快照；解压与 verify 使用同一遥测形状，
+不再各自维护一套近似计数字段。`PipelineRunStats` 只描述“一条帧流水线跑完后的结果”，
+不引入通用 DAG 或调度框架。
+
+三条流水线的 worker 执行循环由 `pipeline::startWorkerStage` 共享：它只负责
+`pop -> handler -> push`、首个错误记录、取消请求、异常屏障和 worker 本地计时合并。
+队列关闭、线程创建/join 顺序与线程拓扑仍由各流水线自己掌握，helper 不接管 reader /
+writer 生命周期，也不引入 DAG 或调度器。handler 返回 `Result<T>`，chunk-end marker
+等顺序语义留在各流水线的 handler 内。reader / writer / parser 线程的异常屏障也由
+`pipeline::runGuarded` / `recordGuardedError` 统一。每条流水线只有一个 `firstError`
+槽：reader、worker pool 和 writer 在错误路径上通过同一把锁写入，先失败者被保留，后续
+级联失败不覆盖根因；正常路径不加锁。取舍见
+`.agents/notes/implemented/architecture/2026-11-06-shared-worker-stage.md` 与
+`.agents/notes/implemented/simplification/2026-11-06-single-pipeline-error-slot.md`。
+
+在 8 核 x86_64 WSL2 主机上，64 MiB 随机短读压缩约 149 MiB/s（相对顺序解析 +47.7%；
+当时的帧预算公式，当前 64 MiB 会主动缩小帧）；
 长读解析占比小，并行收益落在噪声内。WSL2 吞吐波动 ±20-85%，数字仅供粗略参考——
 性能台账见 `docs/benchmarks.md`，真实语料见 `docs/real-corpus.md`，并行化逐阶段史
 见 `docs/roadmap.md`。不引重并行框架（TBB/线程池/异步 I/O）的取舍见
@@ -169,6 +205,7 @@ fqzcomp/zstd 自适应；解压只需同一参考。它在合成 5 Mb/3× 数据
 | 命名空间 | 职责 |
 |---|---|
 | `fqc::format` | 线上格式、流编码、校验和、内存预检 |
+| `fqc::pipeline` | MPMC 队列、reorder/保序提交、in-flight 限额、压缩/解压/并行解析流水线 |
 | `fqc::commands` | profile 判定与单引擎有界执行 |
 | `fqc::io` | FASTQ 解析、gzip 输入、文件/stdin/stdout 流工厂 |
 | `fqc::common` | 记录、结构化错误、日志 |

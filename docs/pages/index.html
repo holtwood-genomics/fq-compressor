@@ -98,8 +98,8 @@ $fqc verify     reads.fqc                          <span class="c"># 完整解�
 $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># 双端</span></code></pre>
 
           <div class="stat-row">
-            <div class="stat"><div class="num">2.96×</div><div class="lbl">Illumina 150 bp 压缩比</div></div>
-            <div class="stat"><div class="num">148.84</div><div class="lbl">MiB/s 压缩吞吐（并行解析）</div></div>
+            <div class="stat"><div class="num">3.33×</div><div class="lbl">Illumina 150 bp 压缩比</div></div>
+            <div class="stat"><div class="num">341.91</div><div class="lbl">MiB/s 压缩吞吐（并行解析）</div></div>
             <div class="stat"><div class="num">16 GiB</div><div class="lbl">默认内存预算（最低 64 MiB）</div></div>
             <div class="stat"><div class="num">4:1</div><div class="lbl">序列 2-bit 打包</div></div>
           </div>
@@ -427,7 +427,14 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
           <img src="assets/memory-model.svg" alt="压缩侧内存三道防线图" width="1180" height="360" loading="lazy">
           <div class="figcaption">图 5 · 压缩侧内存三道防线与解压侧聚合校验</div>
         </div>
-        <p>最大帧大小 = <code>(内存限制 − 运行时预留) / 4</code>；累积目标用 <code>/ 8</code>。在 64 MiB 限制下，发布流程实测 RSS 为 25–32 MiB。</p>
+        <p>逐帧峰值预算 = <code>(内存限制 − 16 MiB 全局预留 − 采样持有字节) / 最大同存帧数</code>；
+        最大同存帧数 = 两条队列可用容量 + in-flight worker 数（并行解析为 <code>max(parser 数, 4)</code>）+ 源端本地帧数。累积目标取峰值的 1/4。
+        并行解析取 <code>max(K, 4)</code>：K=1 与顺序路径同预算，K≥4 与 limiter 实际容量一致。
+        默认 16 GiB、默认并行度下目标帧仍为 64 MiB；64 MiB 下目标帧会缩到约 0.5–1 MiB。实测 64 MiB
+        （316 MB / 1M reads）：顺序约 18.5 MiB、K=4 约 25.8 MiB、K=8 约 27–28 MiB、解压约 21 MiB
+        （顺序归档）。兼容性边界：归档帧大小与压缩预算相关，解码预算需覆盖帧峰值；新版
+        16 GiB 归档在 64 MiB 下会被拒，旧版 64 MiB 归档在新版下约需 101 MiB。归档格式不变，
+        提高 <code>--memory-limit</code> 即可读取。</p>
       </section>
 
       <section class="section cat-architecture" id="arch-profile" data-cat="architecture">
@@ -483,15 +490,16 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
 
       <section class="section cat-architecture" id="arch-performance" data-cat="architecture">
         <h3><span class="kicker">Benchmarks</span>性能基准</h3>
-        <p>合成数据（阶段 H A/B 同窗口，64 MiB 内存预算，随机 FASTQ ×5 次中位数）：</p>
+        <p>当前 realistic 绝对 baseline（2026-11-06，commit <code>513b9f9</code>，16 GiB 预算、64 MiB 目标帧、4 parser、5 次中位数）；不是优化 A/B，不同日期或运行窗口的数字不可横比。极差与原始 JSONL 见<a href="https://github.com/open-genomics/fq-compressor/blob/master/docs/benchmarks.md">docs/benchmarks.md</a>。</p>
         <div class="table-wrap">
           <table>
             <thead>
-              <tr><th>数据</th><th class="num">压缩（并行解析）</th><th class="num">相对顺序解析</th><th class="num">压缩比</th></tr>
+              <tr><th>数据</th><th class="num">实际输入</th><th class="num">压缩</th><th class="num">解压</th><th class="num">压缩比</th><th class="num">压缩 RSS</th></tr>
             </thead>
             <tbody>
-              <tr><td>Illumina-like 150 bp</td><td class="num"><b>148.84 MiB/s</b></td><td class="num">+47.7%</td><td class="num">2.96×</td></tr>
-              <tr><td>ONT-like 20 kbp</td><td class="num">与顺序路径持平</td><td class="num">—</td><td class="num">2.84×</td></tr>
+              <tr><td>Illumina 150 bp</td><td class="num">502.61 MiB</td><td class="num"><b>341.91 MiB/s</b></td><td class="num">353.95 MiB/s</td><td class="num">3.33×</td><td class="num">924 MiB</td></tr>
+              <tr><td>Illumina 150 bp</td><td class="num">1005.22 MiB</td><td class="num">331.75 MiB/s</td><td class="num">410.29 MiB/s</td><td class="num">3.33×</td><td class="num">1 230 MiB</td></tr>
+              <tr><td>ONT 20 kbp</td><td class="num">1024.03 MiB</td><td class="num">317.03 MiB/s</td><td class="num">616.88 MiB/s</td><td class="num">2.63×</td><td class="num">1 647 MiB</td></tr>
             </tbody>
           </table>
         </div>

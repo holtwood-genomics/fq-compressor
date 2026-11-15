@@ -49,8 +49,10 @@ TEST(CompressPipelineTest, BasicRun) {
 
     auto result = pipeline.run(input, nullptr, {}, writer);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->recordCount, kRecordCount);
-    EXPECT_GE(result->frameCount, 1U);
+    EXPECT_EQ(result->metadata.profile, DatasetProfile::kIllumina);
+    EXPECT_EQ(result->archive.recordCount, kRecordCount);
+    EXPECT_GE(result->archive.frameCount, 1U);
+    EXPECT_EQ(result->logicalBytes, input.str().size());
     EXPECT_FALSE(output.str().empty());
 }
 
@@ -63,8 +65,10 @@ TEST(CompressPipelineTest, EmptyInput) {
 
     auto result = pipeline.run(input, nullptr, {}, writer);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->recordCount, 0U);
-    EXPECT_EQ(result->frameCount, 0U);
+    EXPECT_EQ(result->archive.recordCount, 0U);
+    EXPECT_EQ(result->archive.frameCount, 0U);
+    // run() finalizes the archive even when no frame was emitted.
+    EXPECT_FALSE(output.str().empty());
 }
 
 TEST(CompressPipelineTest, MultipleFrames) {
@@ -77,8 +81,8 @@ TEST(CompressPipelineTest, MultipleFrames) {
 
     auto result = pipeline.run(input, nullptr, {}, writer);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->recordCount, kRecordCount);
-    EXPECT_GT(result->frameCount, 1U);
+    EXPECT_EQ(result->archive.recordCount, kRecordCount);
+    EXPECT_GT(result->archive.frameCount, 1U);
 }
 
 TEST(CompressPipelineTest, InitialRecordsEmittedFirst) {
@@ -91,7 +95,7 @@ TEST(CompressPipelineTest, InitialRecordsEmittedFirst) {
 
     auto result = pipeline.run(input, nullptr, initial, writer);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->recordCount, 5U);  // 2 initial + 3 streamed
+    EXPECT_EQ(result->archive.recordCount, 5U);  // 2 initial + 3 streamed
 }
 
 TEST(CompressPipelineTest, PairedRun) {
@@ -104,7 +108,22 @@ TEST(CompressPipelineTest, PairedRun) {
 
     auto result = pipeline.run(primary, &mate, {}, writer);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->recordCount, 10U);
+    EXPECT_EQ(result->archive.recordCount, 10U);
+}
+
+TEST(CompressPipelineTest, ReaderFailureReturnsFormatError) {
+    // A malformed record fails in the reader before any frame reaches the
+    // writer. The shared first-error slot must surface that parse error rather
+    // than a later cascade failure.
+    std::istringstream input("@read0\nACGT\n+\nIII\n");
+    std::ostringstream output;
+
+    ArchiveWriter writer(output, {.profile = DatasetProfile::kIllumina});
+    CompressPipeline pipeline(4096);
+
+    auto result = pipeline.run(input, nullptr, {}, writer);
+    ASSERT_FALSE(result.has_value());
+    EXPECT_EQ(result.error().code, ErrorCode::kFormatError);
 }
 
 TEST(CompressPipelineTest, WriterFailureAbortsReaderWithoutDeadlock) {
@@ -151,8 +170,8 @@ TEST(CompressPipelineTest, SingleEncoderProducesValidArchive) {
 
     auto result = pipeline.run(input, nullptr, {}, writer);
     ASSERT_TRUE(result.has_value());
-    EXPECT_EQ(result->recordCount, kRecordCount);
-    EXPECT_GT(result->frameCount, 1U);
+    EXPECT_EQ(result->archive.recordCount, kRecordCount);
+    EXPECT_GT(result->archive.frameCount, 1U);
     EXPECT_FALSE(output.str().empty());
 }
 
@@ -196,17 +215,17 @@ TEST(CompressPipelineTest, StageTimingsAndQueueStatsArePopulated) {
 
     auto result = pipeline.run(input, nullptr, {}, writer);
     ASSERT_TRUE(result.has_value());
-    ASSERT_GT(result->frameCount, 1U);
-    EXPECT_EQ(result->queue1Stats.pushes, result->frameCount);
-    EXPECT_EQ(result->queue1Stats.pops, result->frameCount);
-    EXPECT_EQ(result->queue2Stats.pushes, result->frameCount);
-    EXPECT_EQ(result->queue2Stats.pops, result->frameCount);
-    EXPECT_GT(result->queue1Stats.highWater, 0U);
-    EXPECT_GT(result->timings.wallNs, 0U);
-    EXPECT_GT(result->timings.encoderEncodeNs, 0U);
+    ASSERT_GT(result->archive.frameCount, 1U);
+    EXPECT_EQ(result->telemetry.inputQueueStats.pushes, result->archive.frameCount);
+    EXPECT_EQ(result->telemetry.inputQueueStats.pops, result->archive.frameCount);
+    EXPECT_EQ(result->telemetry.outputQueueStats.pushes, result->archive.frameCount);
+    EXPECT_EQ(result->telemetry.outputQueueStats.pops, result->archive.frameCount);
+    EXPECT_GT(result->telemetry.inputQueueStats.highWater, 0U);
+    EXPECT_GT(result->telemetry.timings.wallNs, 0U);
+    EXPECT_GT(result->telemetry.timings.workerPrimaryNs, 0U);
     // Stage F: zstd lives in the encoder workers, so their compress section
     // must be nonzero, and the writer's pure-I/O section still runs.
-    EXPECT_GT(result->timings.encoderCompressNs, 0U);
-    EXPECT_GT(result->timings.writerWriteNs, 0U);
-    EXPECT_GT(result->inFlightHighWater, 0U);
+    EXPECT_GT(result->telemetry.timings.workerSecondaryNs, 0U);
+    EXPECT_GT(result->telemetry.timings.writerWorkNs, 0U);
+    EXPECT_GT(result->telemetry.inFlightHighWater, 0U);
 }

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <iostream>
 #include <limits>
 #include <optional>
 #include <string>
@@ -45,11 +46,13 @@ struct CompressOptions {
 struct DecompressOptions {
     std::string input;
     std::string output;
+    std::uint64_t decodeWorkers = 0;
     bool force = false;
 };
 
 struct VerifyOptions {
     std::string input;
+    std::uint64_t decodeWorkers = 0;
 };
 
 struct MaxCompressOptions {
@@ -93,13 +96,16 @@ struct MaxVerifyOptions {
     return std::optional<fqc::format::DatasetProfile>(*profile);
 }
 
-void logStats(std::string_view operation, const fqc::commands::OperationStats& stats, bool quiet) {
+void logStats(std::string_view operation,
+              const fqc::commands::OperationStats& stats,
+              bool quiet,
+              std::string_view outputLabel) {
     if (quiet) {
         return;
     }
     FQC_LOG_INFO(
         "{} complete: profile={}, paired={}, frames={}, records={}, bases={}, input={} "
-        "bytes, output={} bytes",
+        "bytes, {}={} bytes",
         operation,
         fqc::format::profileToString(stats.profile),
         stats.paired,
@@ -107,6 +113,7 @@ void logStats(std::string_view operation, const fqc::commands::OperationStats& s
         stats.recordCount,
         stats.totalBases,
         stats.inputBytes,
+        outputLabel,
         stats.outputBytes);
 }
 
@@ -123,6 +130,11 @@ template <typename T>
 // argv 是标准入口参数签名，不能替换为 std::array。
 // NOLINTNEXTLINE(cppcoreguidelines-avoid-c-arrays, modernize-avoid-c-arrays)
 auto run(int argc, char* argv[]) -> int {
+    // 关闭标准 iostream 与 C stdio 的同步，减少 stdin/stdout 路径上的逐字符锁；
+    // 文件流（std::ofstream）不受该设置影响。日志走 stderr，不经过 iostream。
+    std::ios::sync_with_stdio(false);
+    std::cin.tie(nullptr);
+
     GlobalOptions global;
     CompressOptions compress;
     DecompressOptions decompress;
@@ -183,11 +195,22 @@ auto run(int argc, char* argv[]) -> int {
     decompressCommand
         ->add_option("-o,--output", decompress.output, "FASTQ output, or '-' for stdout")
         ->required();
+    decompressCommand
+        ->add_option("--decode-workers",
+                     decompress.decodeWorkers,
+                     "decoder workers (0 = pipeline default of 4)")
+        ->default_val(0)
+        ->check(CLI::Range(0, 64));
     decompressCommand->add_flag("-f,--force", decompress.force, "Overwrite an existing output");
 
     auto* verifyCommand = app.add_subcommand("verify", "Fully decode and verify an FQC v2 archive");
     verifyCommand->alias("v");
     verifyCommand->add_option("input,-i,--input", verify.input, "FQC v2 input")->required();
+    verifyCommand
+        ->add_option(
+            "--decode-workers", verify.decodeWorkers, "decoder workers (0 = pipeline default of 4)")
+        ->default_val(0)
+        ->check(CLI::Range(0, 64));
 
     auto* maxCompressCommand =
         app.add_subcommand("max-compress", "Experimental fqc-max/v1: fqzcomp quality, ratio-first");
@@ -270,23 +293,25 @@ auto run(int argc, char* argv[]) -> int {
             if (!result) {
                 return reportError(result);
             }
-            logStats("compression", *result, global.quiet);
+            logStats("compression", *result, global.quiet, "output");
         } else if (*decompressCommand) {
-            auto result =
-                fqc::commands::ArchiveEngine::decompress({.inputPath = decompress.input,
-                                                          .outputPath = decompress.output,
-                                                          .memoryLimitBytes = *memoryLimit,
-                                                          .forceOverwrite = decompress.force});
+            auto result = fqc::commands::ArchiveEngine::decompress(
+                {.inputPath = decompress.input,
+                 .outputPath = decompress.output,
+                 .memoryLimitBytes = *memoryLimit,
+                 .decoderWorkers = decompress.decodeWorkers,
+                 .forceOverwrite = decompress.force});
             if (!result) {
                 return reportError(result);
             }
-            logStats("decompression", *result, global.quiet);
+            logStats("decompression", *result, global.quiet, "output");
         } else if (*verifyCommand) {
-            auto result = fqc::commands::ArchiveEngine::verify(verify.input, *memoryLimit);
+            auto result = fqc::commands::ArchiveEngine::verify(
+                verify.input, *memoryLimit, verify.decodeWorkers);
             if (!result) {
                 return reportError(result);
             }
-            logStats("verification", *result, global.quiet);
+            logStats("verification", *result, global.quiet, "decoded");
         } else if (*maxCompressCommand) {
             auto maxBlockBytes = checkedMiB(maxCompress.maxBlockMiB, "--max-block-mib");
             if (!maxBlockBytes) {
@@ -308,7 +333,7 @@ auto run(int argc, char* argv[]) -> int {
             if (!result) {
                 return reportError(result);
             }
-            logStats("max compression", *result, global.quiet);
+            logStats("max compression", *result, global.quiet, "output");
         } else if (*maxDecompressCommand) {
             auto result =
                 fqc::commands::MaxRatioEngine::decompress({.inputPath = maxDecompress.input,
@@ -318,13 +343,13 @@ auto run(int argc, char* argv[]) -> int {
             if (!result) {
                 return reportError(result);
             }
-            logStats("max decompression", *result, global.quiet);
+            logStats("max decompression", *result, global.quiet, "output");
         } else if (*maxVerifyCommand) {
             auto result = fqc::commands::MaxRatioEngine::verify(maxVerify.input, *memoryLimit);
             if (!result) {
                 return reportError(result);
             }
-            logStats("max verification", *result, global.quiet);
+            logStats("max verification", *result, global.quiet, "decoded");
         }
         return 0;
     } catch (const std::exception& error) {

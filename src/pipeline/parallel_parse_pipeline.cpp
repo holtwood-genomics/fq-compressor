@@ -11,7 +11,9 @@
 #include "fqc/pipeline/frame_accumulator.h"
 #include "fqc/pipeline/in_flight_limiter.h"
 #include "fqc/pipeline/mpmc_queue.h"
+#include "fqc/pipeline/stage_guard.h"
 #include "fqc/pipeline/timing.h"
+#include "fqc/pipeline/worker_stage.h"
 
 #include <algorithm>
 #include <array>
@@ -26,7 +28,6 @@
 #include <span>
 #include <stop_token>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -70,13 +71,6 @@ struct ReadyFrame {
     return true;
 }
 
-/// 流水线 worker 的异常屏障消息。jthread 函数体逃逸的异常会直接 std::terminate
-/// （main 的 catch-all 看不到线程内异常），这里统一转成 kInternalError 记录，
-/// 由调用方配合 request_stop() 完成协作取消。
-[[nodiscard]] auto workerCrashError(std::string_view stage, const char* detail) -> Error {
-    return Error{ErrorCode::kInternalError, std::string(stage) + " worker terminated: " + detail};
-}
-
 }  // namespace
 
 /// 对齐窗口：块边界至多落在下一记录起点前 3 个完整行（跨界记录剩余的
@@ -100,6 +94,10 @@ constexpr std::size_t kAlignmentWindowLines = 7;
 /// 可行形状：[]、[qual]、['+', qual]、[seq, '+', qual]。qual 行内容任意，
 /// '+' 行是唯一的形状锚点——没有锚点却要求更长的后缀，说明数据已损坏
 /// （如缺 '+' 行的记录），必须交给上层报错而不是继续跳过。
+// 边界对齐是一个有界状态机：行首对齐 → 收窗口 → 残段形状可行性 → 质量行分流，
+// 四步共享 skipped/partialFirstChar/firstLinePrecededByPlus 等中间判定，拆成独立
+// 函数要么加深耦合并传递大量状态，要么重复 seek，反而更难推理与回归。
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto findFirstRecordStart(std::istream& input,
                           std::uint64_t baseOffset,
                           std::size_t maxLineBytes) -> Result<std::optional<std::uint64_t>> {
@@ -168,17 +166,56 @@ auto findFirstRecordStart(std::istream& input,
         ++count;
     }
 
-    // 残段形状可行性：候选前的非跳过行必须可能是一个合法记录的行后缀（该记录由
-    // 上一 worker 解析），否则这个 framing 在合法输入中不可达。可行形状：[]、
-    // [qual]、['+', qual]、[seq, '+', qual]；'+' 行是唯一的形状锚点。质量行假警报
-    // 被跳过（skipped）后不计入残段。行序按物理顺序（最早在前）。
+    // 块边界落在行首（或上一行换行）时被丢弃的残段为空，partialFirstChar 没有
+    // 线索；窗口首行若紧跟一条裸 '+' 行（LF 或 CRLF），它只可能是上一记录的
+    // quality 行（有效记录的空 quality 会被 parser 拒绝），用文件字节几何补上
+    // 这个判定。非裸 '+' 行已由 parser 拒绝，'+\n' / '+\r\n' 是唯一合法形态。
+    auto precededByBarePlusLine = [&]() -> bool {
+        if (count == 0 || starts[0] < 2) {
+            return false;
+        }
+        const std::uint64_t lineStart = starts[0];
+        input.clear();
+        input.seekg(static_cast<std::streamoff>(lineStart - 2));
+        char lastByte = 0;
+        if (!input.get(lastByte)) {
+            return false;
+        }
+        std::uint64_t contentEnd = lineStart - 2;
+        if (lastByte == '\r') {
+            if (lineStart < 3) {
+                return false;
+            }
+            --contentEnd;
+            input.clear();
+            input.seekg(static_cast<std::streamoff>(contentEnd));
+            char plus = 0;
+            if (!input.get(plus) || plus != '+') {
+                return false;
+            }
+        } else if (lastByte != '+') {
+            return false;
+        }
+        if (contentEnd == 0) {
+            return true;
+        }
+        input.clear();
+        input.seekg(static_cast<std::streamoff>(contentEnd - 1));
+        char delimiter = 0;
+        return input.get(delimiter) && delimiter == '\n';
+    };
+    const bool firstLinePrecededByPlus = precededByBarePlusLine();
+
+    // 残段形状可行性：候选前的非空物理行（含被判定为质量行假警报的 skipped 行）
+    // 必须可能是一个合法记录的行后缀（该记录由上一 worker 解析），否则这个
+    // framing 在合法输入中不可达。可行形状：[]、[qual]、['+', qual]、
+    // [seq, '+', qual]；'+' 行是唯一的形状锚点。skipped 行是物理存在于候选之前
+    // 的上一记录 quality 行，正是上述可行形状的成员——剔除会让 [seq, '+', qual]
+    // 退化成 [seq, '+']，把合法 header 误判为不可行。行序按物理顺序（最早在前）。
     auto residueFeasible = [&](std::size_t candidate) -> bool {
         std::array<const std::string*, 3> r{};
         std::size_t n = 0;
         for (std::size_t i = 0; i < candidate && n < 3; ++i) {
-            if (skipped[i]) {
-                continue;
-            }
             r[n++] = &lines[i];
         }
         switch (n) {
@@ -194,14 +231,16 @@ auto findFirstRecordStart(std::istream& input,
         }
     };
 
-    // 质量行判定：结构拒绝的 '@' 候选，仅当其前一行是 '+'（p≥1）或残段首字符是
-    // '+'（p==0，残段是 '+' 行的后半）时，才可能是上一条记录的 '@' 质量行
+    // 质量行判定：结构拒绝的 '@' 候选，仅当其前一行是 '+'（p≥1）、残段首字符是
+    // '+'（p==0，残段是 '+' 行的后半）或窗口首行紧跟裸 '+' 行（p==0，块边界
+    // 正好落在该质量行或其前一换行）时，才可能是上一条记录的 '@' 质量行
     // （Phred+33 Q31）假警报而应跳过；否则它是畸形记录头（缺 '+' 行、长度不匹配、
     // 只有 id 行等），顺序路径会在同一位置报错，这里必须返回它让 worker 的 parser
     // 同样报错，否则该记录被静默丢弃。
     auto isQualityLine = [&](std::size_t p) -> bool {
         if (p == 0) {
-            return partialFirstChar.has_value() && *partialFirstChar == '+';
+            return firstLinePrecededByPlus ||
+                (partialFirstChar.has_value() && *partialFirstChar == '+');
         }
         for (std::size_t i = p; i > 0; --i) {
             if (!skipped[i - 1]) {
@@ -225,7 +264,7 @@ auto findFirstRecordStart(std::istream& input,
                 // 结构合法但残段不可行（如缺 '+' 记录的伪候选）：继续扫，窗口收满
                 // 仍未命中时报错。
             } else if (isQualityLine(p)) {
-                skipped[p] = true;  // 质量行假警报：跳过，后续候选的残段排除该行
+                skipped[p] = true;  // 质量行假警报：跳过该候选，但仍计入后续残段
             } else {
                 return starts[p];  // 畸形头：worker 的 parser 报与顺序路径相同的错
             }
@@ -277,9 +316,9 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
     const auto inFlightLimit = MpmcQueue<ParseItem, kDefaultQueueDepth>::kUsableCapacity +
         MpmcQueue<OrderedItem, kDefaultQueueDepth>::kUsableCapacity + parserParallelism_;
     InFlightLimiter frameLimiter(inFlightLimit, parserParallelism_);
-    std::optional<Error> parseError;
-    std::optional<Error> encoderError;
-    std::optional<Error> writerError;
+    // 全流水线唯一的首个错误槽：parser / encoder / writer 都可能并发失败，
+    // 所有写入都走同一把错误锁；正常路径不加锁。只保留第一个失败。
+    std::optional<Error> firstError;
     std::mutex errorMutex;
     PipelineStats stats;
     stats.parserWorkers = parserParallelism_;
@@ -289,10 +328,7 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
     const auto wallStart = Clock::now();
     std::atomic<std::uint64_t> readerParseNs{0};
     std::atomic<std::uint64_t> readerPushNs{0};
-    std::atomic<std::uint64_t> encoderPopNs{0};
-    std::atomic<std::uint64_t> encoderEncodeNs{0};
-    std::atomic<std::uint64_t> encoderCompressNs{0};
-    std::atomic<std::uint64_t> encoderPushNs{0};
+    WorkerStageTimingSink encoderTimings;
     std::atomic<std::uint64_t> writerPopNs{0};
     std::atomic<std::uint64_t> writerWriteNs{0};
 
@@ -300,10 +336,7 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
     std::stop_token stopToken = stopSource.get_token();
 
     auto recordError = [&](const Error& error) {
-        const std::lock_guard lk(errorMutex);
-        if (!parseError) {
-            parseError = error;
-        }
+        recordGuardedError(errorMutex, firstError, error);
     };
 
     // K parser workers, one per byte chunk of [sampleEnd, fileSize).
@@ -315,6 +348,9 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
     const std::uint64_t step =
         region == 0 ? 0 : (region + parserParallelism_ - 1) / parserParallelism_;
 
+    // chunk 边界、异常补 marker 和 frame credit 属于同一状态机；
+    // 拆分会隐藏“每个 worker 必须恰好补发一个 marker”的不变量。
+    // NOLINTNEXTLINE(readability-function-cognitive-complexity)
     auto parseWorker = [&](std::uint64_t workerIndex) {
         std::uint64_t parseNs = 0;
         std::uint64_t pushNs = 0;
@@ -327,19 +363,17 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
             pushNs += nanosSince(pushStart);
             return ok;
         };
-        try {
+        // runGuarded 只包异常屏障，不改变 chunk / marker / credit 状态机；
+        // 复杂度仍来自外层 parseWorker 的交错，拆开反而隐藏不变量。
+        // NOLINTNEXTLINE(readability-function-cognitive-complexity)
+        runGuarded("parallel parser", stopSource, firstError, errorMutex, [&] {
             FrameAccumulator accumulator(targetFrameBytes_, false);
 
             auto pushFrame = [&](ParseItem item) -> bool {
-                if (!frameLimiter.acquire(workerIndex, stopToken)) {
-                    return false;
-                }
                 const auto pushStart = Clock::now();
-                const bool ok = queue1.push(std::move(item), stopToken);
+                const bool ok =
+                    pushWithCredit(frameLimiter, workerIndex, queue1, std::move(item), stopToken);
                 pushNs += nanosSince(pushStart);
-                if (!ok) {
-                    frameLimiter.release(workerIndex);
-                }
                 return ok;
             };
 
@@ -444,13 +478,7 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
                     pushFrame(ParseItem{workerIndex, localId++, false, std::move(*tail)});
                 }
             }
-        } catch (const std::exception& error) {
-            recordError(workerCrashError("parallel parser", error.what()));
-            stopSource.request_stop();
-        } catch (...) {
-            recordError(workerCrashError("parallel parser", "unknown exception"));
-            stopSource.request_stop();
-        }
+        });
         // 完整性协议：每个 worker 无条件恰好发一个 chunk-end marker（异常路径
         // 也一样），否则 writer 的 ChunkOrderer 会永远等不到该 chunk 的完成标记。
         pushMarker(ParseItem{workerIndex, localId, true, {}});
@@ -467,105 +495,51 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
     }
 
     // N encoder workers (same as CompressPipeline, plus marker pass-through).
-    auto encoderLoop = [&] {
-        std::uint64_t popNs = 0;
-        std::uint64_t encodeNs = 0;
-        std::uint64_t compressNs = 0;
-        std::uint64_t pushNs = 0;
-        try {
-            while (!stopToken.stop_requested()) {
-                const auto popStart = Clock::now();
-                auto in = queue1.pop(stopToken);
-                popNs += nanosSince(popStart);
-                if (!in.has_value()) {
-                    break;
-                }
-                if (in->chunkEnd) {
-                    OrderedItem marker{in->chunk, in->local, true, nullptr};
-                    const auto pushStart = Clock::now();
-                    const bool pushed = queue2.push(std::move(marker), stopToken);
-                    pushNs += nanosSince(pushStart);
-                    if (!pushed) {
-                        break;
-                    }
-                    continue;
-                }
-                const auto encodeStart = Clock::now();
-                auto encoded = format::encodeFrame(in->records, writer.options());
-                encodeNs += nanosSince(encodeStart);
-                if (!encoded) {
-                    {
-                        const std::lock_guard lk(errorMutex);
-                        if (!encoderError) {
-                            encoderError = encoded.error();
-                        }
-                    }
-                    stopSource.request_stop();
-                    break;
-                }
-                const auto compressStart = Clock::now();
-                auto compressed =
-                    format::compressFrame(std::move(*encoded), writer.options().qualityZstdLevel);
-                compressNs += nanosSince(compressStart);
-                if (!compressed) {
-                    {
-                        const std::lock_guard lk(errorMutex);
-                        if (!encoderError) {
-                            encoderError = compressed.error();
-                        }
-                    }
-                    stopSource.request_stop();
-                    break;
-                }
-                OrderedItem out{in->chunk, in->local, false, std::move(*compressed)};
-                const auto pushStart = Clock::now();
-                const bool pushed = queue2.push(std::move(out), stopToken);
-                pushNs += nanosSince(pushStart);
-                if (!pushed) {
-                    break;
-                }
-            }
-        } catch (const std::exception& error) {
-            const std::lock_guard lk(errorMutex);
-            if (!encoderError) {
-                encoderError = workerCrashError("parallel encoder", error.what());
-            }
-            stopSource.request_stop();
-        } catch (...) {
-            const std::lock_guard lk(errorMutex);
-            if (!encoderError) {
-                encoderError = workerCrashError("parallel encoder", "unknown exception");
-            }
-            stopSource.request_stop();
+    auto encodeWorker = [&](const ParseItem& in,
+                            WorkerStageTimings& timings) -> Result<OrderedItem> {
+        if (in.chunkEnd) {
+            return OrderedItem{in.chunk, in.local, true, nullptr};
         }
-        encoderPopNs.fetch_add(popNs, std::memory_order_relaxed);
-        encoderEncodeNs.fetch_add(encodeNs, std::memory_order_relaxed);
-        encoderCompressNs.fetch_add(compressNs, std::memory_order_relaxed);
-        encoderPushNs.fetch_add(pushNs, std::memory_order_relaxed);
+        const auto encodeStart = Clock::now();
+        auto encoded = format::encodeFrame(in.records, writer.options());
+        timings.computeNs += nanosSince(encodeStart);
+        if (!encoded) {
+            return std::unexpected(std::move(encoded.error()));
+        }
+        const auto compressStart = Clock::now();
+        auto compressed =
+            format::compressFrame(std::move(*encoded), writer.options().qualityZstdLevel);
+        timings.secondaryNs += nanosSince(compressStart);
+        if (!compressed) {
+            return std::unexpected(std::move(compressed.error()));
+        }
+        return OrderedItem{in.chunk, in.local, false, std::move(*compressed)};
     };
-
-    std::vector<std::jthread> encoders;
-    encoders.reserve(encoderParallelism_);
-    for (std::size_t i = 0; i < encoderParallelism_; ++i) {
-        encoders.emplace_back(encoderLoop);
-    }
+    auto encoders = startWorkerStage(encoderParallelism_,
+                                     queue1,
+                                     queue2,
+                                     stopToken,
+                                     stopSource,
+                                     errorMutex,
+                                     firstError,
+                                     "parallel encoder",
+                                     std::move(encodeWorker),
+                                     encoderTimings);
 
     // Writer: drain in (chunk, local) lexicographic order via ChunkOrderer.
     std::jthread writerThread([&] {
         std::uint64_t popNs = 0;
         std::uint64_t writeNs = 0;
-        try {
+        runGuarded("parallel writer", stopSource, firstError, errorMutex, [&] {
             ChunkOrderer<ReadyFrame> orderer;
             auto emitReady = [&](std::vector<ReadyFrame> ready) {
                 for (auto& readyFrame : ready) {
-                    stats.recordCount += readyFrame.frame->recordCount;
-                    stats.frameCount += 1;
                     const auto writeStart = Clock::now();
                     auto result = writer.writeCompressedFrame(std::move(readyFrame.frame));
                     writeNs += nanosSince(writeStart);
                     frameLimiter.release(readyFrame.chunk);
                     if (!result) {
-                        writerError = result.error();
+                        recordGuardedError(errorMutex, firstError, result.error());
                         stopSource.request_stop();
                         return;
                     }
@@ -584,17 +558,9 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
                     emitReady(orderer.submitFrame(
                         out->chunk, out->local, ReadyFrame{out->chunk, std::move(out->frame)}));
                 }
-                if (writerError.has_value()) {
-                    break;
-                }
+                // emitReady 失败时已 request_stop，下一轮 while 条件会退出。
             }
-        } catch (const std::exception& error) {
-            writerError = workerCrashError("parallel writer", error.what());
-            stopSource.request_stop();
-        } catch (...) {
-            writerError = workerCrashError("parallel writer", "unknown exception");
-            stopSource.request_stop();
-        }
+        });
         writerPopNs.store(popNs, std::memory_order_relaxed);
         writerWriteNs.store(writeNs, std::memory_order_relaxed);
     });
@@ -611,31 +577,31 @@ auto ParallelParsePipeline::run(std::span<const ReadRecord> initialRecords,
     queue2.close();
     writerThread.join();
 
-    stats.timings = {
-        .readerParseNs = readerParseNs.load(std::memory_order_relaxed),
-        .readerPushNs = readerPushNs.load(std::memory_order_relaxed),
-        .encoderPopNs = encoderPopNs.load(std::memory_order_relaxed),
-        .encoderEncodeNs = encoderEncodeNs.load(std::memory_order_relaxed),
-        .encoderCompressNs = encoderCompressNs.load(std::memory_order_relaxed),
-        .encoderPushNs = encoderPushNs.load(std::memory_order_relaxed),
-        .writerPopNs = writerPopNs.load(std::memory_order_relaxed),
-        .writerWriteNs = writerWriteNs.load(std::memory_order_relaxed),
-        .wallNs = nanosSince(wallStart),
-    };
-    stats.queue1Stats = queue1.stats();
-    stats.queue2Stats = queue2.stats();
-    stats.logicalBytes = logicalBytes.load(std::memory_order_relaxed);
-    stats.inFlightHighWater = frameLimiter.highWater();
+    if (firstError.has_value()) {
+        return makeError<PipelineStats>(std::move(*firstError));
+    }
+    // Same contract as CompressPipeline: run() owns archive completion.
+    FQC_TRY(writer.finish());
 
-    if (writerError.has_value()) {
-        return makeError<PipelineStats>(std::move(*writerError));
-    }
-    if (encoderError.has_value()) {
-        return makeError<PipelineStats>(std::move(*encoderError));
-    }
-    if (parseError.has_value()) {
-        return makeError<PipelineStats>(std::move(*parseError));
-    }
+    stats.telemetry = makeTelemetry(
+        {
+            .readerWorkNs = readerParseNs.load(std::memory_order_relaxed),
+            .readerPushNs = readerPushNs.load(std::memory_order_relaxed),
+            .workerPopNs = encoderTimings.popNs.load(std::memory_order_relaxed),
+            .workerPrimaryNs = encoderTimings.computeNs.load(std::memory_order_relaxed),
+            .workerSecondaryNs = encoderTimings.secondaryNs.load(std::memory_order_relaxed),
+            .workerPushNs = encoderTimings.pushNs.load(std::memory_order_relaxed),
+            .writerPopNs = writerPopNs.load(std::memory_order_relaxed),
+            .writerWorkNs = writerWriteNs.load(std::memory_order_relaxed),
+            .wallNs = nanosSince(wallStart),
+        },
+        queue1,
+        queue2,
+        frameLimiter);
+    stats.metadata = writer.metadata();
+    // The writer is the only stage that knows what actually reached disk.
+    stats.archive = writer.stats();
+    stats.logicalBytes = logicalBytes.load(std::memory_order_relaxed);
     return stats;
 }
 

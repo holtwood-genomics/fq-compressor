@@ -22,6 +22,9 @@ inline constexpr std::uint16_t kArchiveVersion = 2;
 inline constexpr std::size_t kDefaultTargetFrameBytes = std::size_t{64} * 1024 * 1024;
 inline constexpr std::size_t kDefaultMaxFrameBytes = std::size_t{512} * 1024 * 1024;
 inline constexpr std::size_t kDefaultMemoryLimitBytes = 16ULL * 1024ULL * 1024ULL * 1024ULL;
+/// Process-wide codec/runtime headroom (zstd scratch, allocator slack) that is
+/// budgeted once per process, never per in-flight frame.
+inline constexpr std::size_t kCodecMemoryReserveBytes = std::size_t{16} * 1024 * 1024;
 /// Accepted range for the configurable quality-stream zstd level. Single source
 /// of truth: the CLI validates against it and the archive encoder enforces it.
 inline constexpr int kMinZstdLevel = 1;
@@ -53,7 +56,12 @@ enum class DatasetProfile : std::uint8_t {
 struct ArchiveOptions {
     DatasetProfile profile = DatasetProfile::kIllumina;
     bool paired = false;
+    /// Conservative frame-local peak budget. The writer's encode check and
+    /// the reader's decode check compare their frame-local estimate against
+    /// it; the process-wide codec reserve is separate.
     std::size_t maxFrameBytes = kDefaultMaxFrameBytes;
+    /// Whole-process budget, including the codec/runtime reserve. The frame
+    /// check subtracts `kCodecMemoryReserveBytes` once.
     std::size_t memoryLimitBytes = kDefaultMemoryLimitBytes;
     /// zstd level for the quality stream only; ID/sequence streams stay at
     /// level 1 (quality is the ratio bottleneck; the other streams gain
@@ -80,9 +88,9 @@ struct ArchiveStats {
 /// by `compressFrame` (zstd, also CPU-only). Splitting encode from compress
 /// keeps each pipeline stage's work item small and independently schedulable.
 struct EncodedFrame {
-    std::vector<std::uint8_t> rawIds;
-    std::vector<std::uint8_t> rawSequences;
-    std::vector<std::uint8_t> rawQualities;
+    ByteBuffer rawIds;
+    ByteBuffer rawSequences;
+    ByteBuffer rawQualities;
     std::uint32_t recordCount = 0;
     std::uint64_t totalBases = 0;
     std::uint64_t checksum = 0;
@@ -96,9 +104,9 @@ struct EncodedFrame {
 /// `ArchiveWriter::writeCompressedFrame` (frame header + write, no CPU-heavy
 /// work left).
 struct CompressedFrame {
-    std::vector<std::uint8_t> ids;
-    std::vector<std::uint8_t> sequences;
-    std::vector<std::uint8_t> qualities;
+    ByteBuffer ids;
+    ByteBuffer sequences;
+    ByteBuffer qualities;
     std::uint64_t rawIdsSize = 0;
     std::uint64_t rawSequencesSize = 0;
     std::uint64_t rawQualitiesSize = 0;
@@ -131,9 +139,9 @@ struct CompressedFrame {
 /// (pure computation, safe on a worker thread). Sizes are pre-validated
 /// against the reader's configured limits, so they fit `std::size_t`.
 struct RawFrame {
-    std::vector<std::uint8_t> ids;        // zstd-compressed
-    std::vector<std::uint8_t> sequences;  // zstd-compressed
-    std::vector<std::uint8_t> qualities;  // zstd-compressed
+    ByteBuffer ids;        // zstd-compressed
+    ByteBuffer sequences;  // zstd-compressed
+    ByteBuffer qualities;  // zstd-compressed
     std::size_t rawIdsSize = 0;
     std::size_t rawSequencesSize = 0;
     std::size_t rawQualitiesSize = 0;

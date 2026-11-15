@@ -15,15 +15,20 @@
 namespace fqc::commands {
 
 inline constexpr std::size_t kDefaultMemoryLimitBytes = format::kDefaultMemoryLimitBytes;
+/// Historical upper bounds for profile sampling. The effective budget is also
+/// capped at one eighth of the process memory limit after the codec reserve.
 inline constexpr std::size_t kProfileSampleMaxRecords = 50'000;
-inline constexpr std::size_t kProfileSampleMaxBases = 512ULL * 1024ULL * 1024ULL;
+inline constexpr std::size_t kProfileSampleMaxBytes = 512ULL * 1024ULL * 1024ULL;
 
 struct CompressionRequest {
     std::filesystem::path inputPath;
     std::filesystem::path matePath;
     std::filesystem::path outputPath;
     std::optional<format::DatasetProfile> profile;
+    /// Whole-process memory budget. Frame and sample limits are derived from it.
     std::size_t memoryLimitBytes = kDefaultMemoryLimitBytes;
+    /// Requested retained-byte target for one frame. The engine may lower it
+    /// when the budget derived from `memoryLimitBytes` is smaller.
     std::size_t targetFrameBytes = format::kDefaultTargetFrameBytes;
     int qualityZstdLevel = 1;
     /// Parser workers for parallel parsing; 0 forces the sequential reader.
@@ -40,7 +45,11 @@ struct CompressionRequest {
 struct DecompressionRequest {
     std::filesystem::path inputPath;
     std::filesystem::path outputPath;
+    /// Whole-process memory budget; the per-frame decode limit is derived from it.
     std::size_t memoryLimitBytes = kDefaultMemoryLimitBytes;
+    /// Decoder workers; 0 keeps the pipeline default (4). Decoding is
+    /// CPU-bound, so many-core hosts can raise this independently of I/O.
+    std::size_t decoderWorkers = 0;
     bool forceOverwrite = false;
 };
 
@@ -50,6 +59,9 @@ struct OperationStats {
     std::uint64_t frameCount = 0;
     std::uint64_t recordCount = 0;
     std::uint64_t totalBases = 0;
+    /// Compression reports FASTQ -> archive; decompression and verification
+    /// report archive -> logical FASTQ. Verification decodes the full output
+    /// but writes no file, so its `outputBytes` is the decoded size.
     std::uint64_t inputBytes = 0;
     std::uint64_t outputBytes = 0;
 };
@@ -61,9 +73,11 @@ public:
     [[nodiscard]] static auto compress(const CompressionRequest& request) -> Result<OperationStats>;
     [[nodiscard]] static auto decompress(const DecompressionRequest& request)
         -> Result<OperationStats>;
+    /// `memoryLimitBytes` is the whole-process budget; the per-frame decode
+    /// limit is derived from it. `decoderWorkers == 0` keeps the pipeline default.
     [[nodiscard]] static auto verify(const std::filesystem::path& inputPath,
-                                     std::size_t memoryLimitBytes = kDefaultMemoryLimitBytes)
-        -> Result<OperationStats>;
+                                     std::size_t memoryLimitBytes = kDefaultMemoryLimitBytes,
+                                     std::size_t decoderWorkers = 0) -> Result<OperationStats>;
 };
 
 }  // namespace fqc::commands

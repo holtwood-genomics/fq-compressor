@@ -10,7 +10,9 @@
 #include "fqc/pipeline/in_flight_limiter.h"
 #include "fqc/pipeline/mpmc_queue.h"
 #include "fqc/pipeline/reorder_buffer.h"
+#include "fqc/pipeline/stage_guard.h"
 #include "fqc/pipeline/timing.h"
+#include "fqc/pipeline/worker_stage.h"
 
 #include <atomic>
 #include <cstddef>
@@ -21,8 +23,6 @@
 #include <optional>
 #include <span>
 #include <stop_token>
-#include <string>
-#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -49,13 +49,6 @@ struct OrderedFrame {
     std::unique_ptr<format::CompressedFrame> frame;
 };
 
-// 流水线 worker 的异常屏障消息。jthread 函数体逃逸的异常会直接 std::terminate
-// （main 的 catch-all 看不到线程内异常），这里统一转成 kInternalError 记录，
-// 由调用方配合 request_stop() 完成协作取消。
-[[nodiscard]] auto workerCrashError(std::string_view stage, const char* detail) -> Error {
-    return Error{ErrorCode::kInternalError, std::string(stage) + " worker terminated: " + detail};
-}
-
 }  // namespace
 
 CompressPipeline::CompressPipeline(std::size_t targetFrameBytes,
@@ -77,10 +70,11 @@ auto CompressPipeline::run(std::istream& primary,
     const auto inFlightLimit = MpmcQueue<InputFrame, kDefaultQueueDepth>::kUsableCapacity +
         MpmcQueue<OrderedFrame, kDefaultQueueDepth>::kUsableCapacity + parallelism_;
     InFlightLimiter frameLimiter(inFlightLimit);
-    std::optional<Error> readerError;
-    std::optional<Error> encoderError;
-    std::optional<Error> writerError;
-    std::mutex encoderErrorMutex;
+    // 全流水线唯一的首个错误槽：reader / encoder / writer 都可能并发失败，
+    // 所有写入都走同一把错误锁；正常路径不加锁。只保留第一个失败，避免固定
+    // 阶段优先级掩盖真正的根因。
+    std::optional<Error> firstError;
+    std::mutex errorMutex;
     PipelineStats stats;
     stats.parserWorkers = 1;
     stats.encoderWorkers = parallelism_;
@@ -92,10 +86,7 @@ auto CompressPipeline::run(std::istream& primary,
     const auto wallStart = Clock::now();
     std::atomic<std::uint64_t> readerParseNs{0};
     std::atomic<std::uint64_t> readerPushNs{0};
-    std::atomic<std::uint64_t> encoderPopNs{0};
-    std::atomic<std::uint64_t> encoderEncodeNs{0};
-    std::atomic<std::uint64_t> encoderCompressNs{0};
-    std::atomic<std::uint64_t> encoderPushNs{0};
+    WorkerStageTimingSink encoderTimings;
     std::atomic<std::uint64_t> writerPopNs{0};
     std::atomic<std::uint64_t> writerWriteNs{0};
 
@@ -107,17 +98,17 @@ auto CompressPipeline::run(std::istream& primary,
     std::stop_source stopSource;
     std::stop_token stopToken = stopSource.get_token();
 
-    // Synchronization invariant: each shared variable is written by exactly
-    // one worker -- `readerError`/`logicalBytes` by reader, `writerError`/
-    // `stats` by the writer, `encoderError` by whichever encoder fails first
-    // (guarded by `encoderErrorMutex` since N encoders compete). The workers
-    // share no mutable state but the two queues (MPMC, thread-safe) and the
-    // stop_source. The main thread reads these only after the matching join()
-    // below, whose happens-before edge makes the access safe.
+    // Synchronization invariant: `logicalBytes` is written by the reader and
+    // `stats` by the writer; the main thread reads them only after the
+    // matching join() below, whose happens-before edge makes the access safe.
+    // `firstError` is the one cross-stage slot: every stage writes it under
+    // `errorMutex`, so the first failure wins regardless of which stage
+    // reports it. Otherwise the workers share only the two queues (MPMC,
+    // thread-safe) and the stop_source.
     std::jthread reader([&] {
         std::uint64_t parseNs = 0;
         std::uint64_t pushNs = 0;
-        try {
+        runGuarded("compress reader", stopSource, firstError, errorMutex, [&] {
             io::FastqParser parser(primary);
             std::optional<io::FastqParser> mateParser;
             if (mate != nullptr) {
@@ -128,16 +119,10 @@ auto CompressPipeline::run(std::istream& primary,
             FrameAccumulator accumulator(targetFrameBytes_, paired_);
 
             auto pushFrame = [&](std::vector<ReadRecord> closed) -> bool {
-                if (!frameLimiter.acquire(stopToken)) {
-                    return false;
-                }
-                InputFrame in{frameId++, std::move(closed)};
                 const auto pushStart = Clock::now();
-                const bool ok = queue1.push(std::move(in), stopToken);
+                const bool ok = pushWithCredit(
+                    frameLimiter, queue1, InputFrame{frameId++, std::move(closed)}, stopToken);
                 pushNs += nanosSince(pushStart);
-                if (!ok) {
-                    frameLimiter.release();
-                }
                 return ok;
             };
 
@@ -163,7 +148,7 @@ auto CompressPipeline::run(std::istream& primary,
                 auto pair = io::readRecordPair(parser, mateParser ? &*mateParser : nullptr);
                 parseNs += nanosSince(parseStart);
                 if (!pair) {
-                    readerError = pair.error();
+                    recordGuardedError(errorMutex, firstError, pair.error());
                     stopSource.request_stop();
                     break;
                 }
@@ -185,13 +170,7 @@ auto CompressPipeline::run(std::istream& primary,
                     pushFrame(std::move(*tail));
                 }
             }
-        } catch (const std::exception& error) {
-            readerError = workerCrashError("compress reader", error.what());
-            stopSource.request_stop();
-        } catch (...) {
-            readerError = workerCrashError("compress reader", "unknown exception");
-            stopSource.request_stop();
-        }
+        });
         queue1.close();
         readerParseNs.store(parseNs, std::memory_order_relaxed);
         readerPushNs.store(pushNs, std::memory_order_relaxed);
@@ -199,85 +178,40 @@ auto CompressPipeline::run(std::istream& primary,
 
     // N encoder workers: encodeFrame + compressFrame (no writer state).
     // Workers do not close queue2; the main thread closes it after join.
-    auto encoderLoop = [&] {
-        std::uint64_t popNs = 0;
-        std::uint64_t encodeNs = 0;
-        std::uint64_t compressNs = 0;
-        std::uint64_t pushNs = 0;
-        try {
-            while (!stopToken.stop_requested()) {
-                const auto popStart = Clock::now();
-                auto in = queue1.pop(stopToken);
-                popNs += nanosSince(popStart);
-                if (!in.has_value()) {
-                    break;
-                }
-                const auto encodeStart = Clock::now();
-                auto encoded = format::encodeFrame(in->records, writer.options());
-                encodeNs += nanosSince(encodeStart);
-                if (!encoded) {
-                    {
-                        const std::lock_guard lk(encoderErrorMutex);
-                        if (!encoderError) {
-                            encoderError = encoded.error();
-                        }
-                    }
-                    stopSource.request_stop();
-                    break;
-                }
-                const auto compressStart = Clock::now();
-                auto compressed =
-                    format::compressFrame(std::move(*encoded), writer.options().qualityZstdLevel);
-                compressNs += nanosSince(compressStart);
-                if (!compressed) {
-                    {
-                        const std::lock_guard lk(encoderErrorMutex);
-                        if (!encoderError) {
-                            encoderError = compressed.error();
-                        }
-                    }
-                    stopSource.request_stop();
-                    break;
-                }
-                OrderedFrame out{in->frameId, std::move(*compressed)};
-                const auto pushStart = Clock::now();
-                const bool pushed = queue2.push(std::move(out), stopToken);
-                pushNs += nanosSince(pushStart);
-                if (!pushed) {
-                    break;
-                }
-            }
-        } catch (const std::exception& error) {
-            const std::lock_guard lk(encoderErrorMutex);
-            if (!encoderError) {
-                encoderError = workerCrashError("compress encoder", error.what());
-            }
-            stopSource.request_stop();
-        } catch (...) {
-            const std::lock_guard lk(encoderErrorMutex);
-            if (!encoderError) {
-                encoderError = workerCrashError("compress encoder", "unknown exception");
-            }
-            stopSource.request_stop();
+    auto encodeWorker = [&](const InputFrame& in,
+                            WorkerStageTimings& timings) -> Result<OrderedFrame> {
+        const auto encodeStart = Clock::now();
+        auto encoded = format::encodeFrame(in.records, writer.options());
+        timings.computeNs += nanosSince(encodeStart);
+        if (!encoded) {
+            return std::unexpected(std::move(encoded.error()));
         }
-        encoderPopNs.fetch_add(popNs, std::memory_order_relaxed);
-        encoderEncodeNs.fetch_add(encodeNs, std::memory_order_relaxed);
-        encoderCompressNs.fetch_add(compressNs, std::memory_order_relaxed);
-        encoderPushNs.fetch_add(pushNs, std::memory_order_relaxed);
+        const auto compressStart = Clock::now();
+        auto compressed =
+            format::compressFrame(std::move(*encoded), writer.options().qualityZstdLevel);
+        timings.secondaryNs += nanosSince(compressStart);
+        if (!compressed) {
+            return std::unexpected(std::move(compressed.error()));
+        }
+        return OrderedFrame{in.frameId, std::move(*compressed)};
     };
-
-    std::vector<std::jthread> encoders;
-    encoders.reserve(parallelism_);
-    for (std::size_t i = 0; i < parallelism_; ++i) {
-        encoders.emplace_back(encoderLoop);
-    }
+    auto encoders = startWorkerStage(parallelism_,
+                                     queue1,
+                                     queue2,
+                                     stopToken,
+                                     stopSource,
+                                     errorMutex,
+                                     firstError,
+                                     "compress encoder",
+                                     std::move(encodeWorker),
+                                     encoderTimings);
 
     // Writer: reorder by frameId, then assemble the frame header and write.
     // ArchiveWriter and the reorder buffer stay on this thread.
     std::jthread writerThread([&] {
         std::uint64_t popNs = 0;
         std::uint64_t writeNs = 0;
-        try {
+        runGuarded("compress writer", stopSource, firstError, errorMutex, [&] {
             ReorderBuffer<std::unique_ptr<format::CompressedFrame>> reorder;
             while (!stopToken.stop_requested()) {
                 const auto popStart = Clock::now();
@@ -288,29 +222,20 @@ auto CompressPipeline::run(std::istream& primary,
                 }
                 auto ready = reorder.submit(out->frameId, std::move(out->frame));
                 for (auto& frame : ready) {
-                    stats.recordCount += frame->recordCount;
-                    stats.frameCount += 1;
                     const auto writeStart = Clock::now();
                     auto result = writer.writeCompressedFrame(std::move(frame));
                     writeNs += nanosSince(writeStart);
                     frameLimiter.release();
                     if (!result) {
-                        writerError = result.error();
+                        recordGuardedError(errorMutex, firstError, result.error());
                         stopSource.request_stop();
-                        break;
+                        return;
                     }
                 }
-                if (writerError.has_value()) {
-                    break;
-                }
+                // 其它阶段失败时 stopToken 已请求，下一轮 while 条件会退出；
+                // 本阶段失败则由上面的 return 直接结束 writer lambda。
             }
-        } catch (const std::exception& error) {
-            writerError = workerCrashError("compress writer", error.what());
-            stopSource.request_stop();
-        } catch (...) {
-            writerError = workerCrashError("compress writer", "unknown exception");
-            stopSource.request_stop();
-        }
+        });
         writerPopNs.store(popNs, std::memory_order_relaxed);
         writerWriteNs.store(writeNs, std::memory_order_relaxed);
     });
@@ -324,32 +249,35 @@ auto CompressPipeline::run(std::istream& primary,
     queue2.close();
     writerThread.join();
 
-    // All workers joined, so the relaxed loads below see the final values.
-    stats.timings = {
-        .readerParseNs = readerParseNs.load(std::memory_order_relaxed),
-        .readerPushNs = readerPushNs.load(std::memory_order_relaxed),
-        .encoderPopNs = encoderPopNs.load(std::memory_order_relaxed),
-        .encoderEncodeNs = encoderEncodeNs.load(std::memory_order_relaxed),
-        .encoderCompressNs = encoderCompressNs.load(std::memory_order_relaxed),
-        .encoderPushNs = encoderPushNs.load(std::memory_order_relaxed),
-        .writerPopNs = writerPopNs.load(std::memory_order_relaxed),
-        .writerWriteNs = writerWriteNs.load(std::memory_order_relaxed),
-        .wallNs = nanosSince(wallStart),
-    };
-    stats.queue1Stats = queue1.stats();
-    stats.queue2Stats = queue2.stats();
-    stats.logicalBytes = logicalBytes;
-    stats.inFlightHighWater = frameLimiter.highWater();
+    if (firstError.has_value()) {
+        return makeError<PipelineStats>(std::move(*firstError));
+    }
+    // A compression run owns the archive lifetime: finish the footer before
+    // exposing counters, so `PipelineStats.archive` is a complete snapshot.
+    FQC_TRY(writer.finish());
 
-    if (writerError.has_value()) {
-        return makeError<PipelineStats>(std::move(*writerError));
-    }
-    if (encoderError.has_value()) {
-        return makeError<PipelineStats>(std::move(*encoderError));
-    }
-    if (readerError.has_value()) {
-        return makeError<PipelineStats>(std::move(*readerError));
-    }
+    // All workers joined, so the relaxed loads below see the final values.
+    stats.telemetry = makeTelemetry(
+        {
+            .readerWorkNs = readerParseNs.load(std::memory_order_relaxed),
+            .readerPushNs = readerPushNs.load(std::memory_order_relaxed),
+            .workerPopNs = encoderTimings.popNs.load(std::memory_order_relaxed),
+            .workerPrimaryNs = encoderTimings.computeNs.load(std::memory_order_relaxed),
+            .workerSecondaryNs = encoderTimings.secondaryNs.load(std::memory_order_relaxed),
+            .workerPushNs = encoderTimings.pushNs.load(std::memory_order_relaxed),
+            .writerPopNs = writerPopNs.load(std::memory_order_relaxed),
+            .writerWorkNs = writerWriteNs.load(std::memory_order_relaxed),
+            .wallNs = nanosSince(wallStart),
+        },
+        queue1,
+        queue2,
+        frameLimiter);
+    stats.metadata = writer.metadata();
+    // ArchiveWriter owns the authoritative byte/record counters; copying them
+    // after join keeps the pipeline result aligned with what was actually
+    // written instead of maintaining a second set of counters in parallel.
+    stats.archive = writer.stats();
+    stats.logicalBytes = logicalBytes;
     return stats;
 }
 
