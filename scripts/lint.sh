@@ -19,14 +19,18 @@ PRESET="${2:-clang-debug}"
 
 # 查找所有源文件（含测试，用于格式检查）
 find_all_sources() {
-    find "$PROJECT_DIR/src" "$PROJECT_DIR/include" "$PROJECT_DIR/tests" \
+    find "$PROJECT_DIR/src" "$PROJECT_DIR/include" "$PROJECT_DIR/tests" "$PROJECT_DIR/tools" \
         \( -name "*.cpp" -o -name "*.h" -o -name "*.hpp" \) \
         -not -path "*/build/*" 2>/dev/null || true
 }
 
-# 查找生产 translation units（项目头文件通过 header filter 检查）
+# 查找生产 translation units（项目头文件通过 header filter 检查）。
+# tools/quality_probe 依赖外部 htscodecs 源码树，不在 CMake compile_commands 中；
+# 它由 tools/quality_probe/build.sh 单独构建，不参与 clang-tidy，避免把实验工具
+# 的外部依赖伪装成生产 target。格式检查仍覆盖该文件。
 find_lint_sources() {
-    find "$PROJECT_DIR/src" -name "*.cpp" -not -path "*/build/*" 2>/dev/null || true
+    find "$PROJECT_DIR/src" "$PROJECT_DIR/tools" -name "*.cpp" \
+        -not -path "*/build/*" -not -path "*/tools/quality_probe/*" 2>/dev/null || true
 }
 
 # 检测 clang-format 版本

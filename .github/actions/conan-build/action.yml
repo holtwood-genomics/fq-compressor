@@ -28,10 +28,29 @@ inputs:
       built against libstdc++ and cannot link against libc++.
     required: false
     default: 'libc++'
+  run-build:
+    description: >-
+      'true' (default) runs conan install + full build via scripts/build.sh.
+      'false' stops after the CMake configure step — enough to produce
+      compile_commands.json (CMAKE_EXPORT_COMPILE_COMMANDS=ON), used by the
+      clang-tidy job which compiles nothing.
+    required: false
+    default: 'true'
 
 runs:
   using: 'composite'
   steps:
+    # 依赖包按 settings（libcxx/build_type）而非 preset 分组缓存：相同 settings
+    # 的 preset（如 clang-debug 与 clang-coverage）共享同一份包缓存；key 绑定
+    # conan.lock，锁文件变更后自动失效，restore-keys 兜底部分命中。
+    - name: Restore Conan package cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.conan2
+        key: conan-${{ runner.os }}-clang18-${{ inputs.conan-libcxx }}-${{ inputs.conan-build-type }}-${{ hashFiles('conan.lock') }}
+        restore-keys: |
+          conan-${{ runner.os }}-clang18-${{ inputs.conan-libcxx }}-${{ inputs.conan-build-type }}-
+
     - name: Install toolchain
       shell: bash
       run: |
@@ -66,9 +85,15 @@ runs:
           -s compiler.cppstd=23
 
     - name: Build
+      if: inputs.run-build != 'false'
       shell: bash
       env:
         # 若 ccache 在 PATH 中则启用；否则为无害 no-op
         CMAKE_C_COMPILER_LAUNCHER: ccache
         CMAKE_CXX_COMPILER_LAUNCHER: ccache
       run: ./scripts/build.sh ${{ inputs.preset }}
+
+    - name: Configure only
+      if: inputs.run-build == 'false'
+      shell: bash
+      run: cmake --preset ${{ inputs.preset }}

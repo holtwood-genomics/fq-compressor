@@ -3,8 +3,21 @@ name: CI
 on:
   push:
     branches: [master]
+    # 纯文档提交不触发 CI（约省 20 runner-minutes/次）。只豁免根级 *.md
+    # 与专门的文档目录；不能用 **.md，否则 .agents/notes 也会被吞掉，而
+    # notes 封印校验（notes job）必须对 .agents/notes 的任何变更保持运行。
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'openspec/**'
+      - 'perf-baselines/**'
   pull_request:
     branches: [master]
+    paths-ignore:
+      - '*.md'
+      - 'docs/**'
+      - 'openspec/**'
+      - 'perf-baselines/**'
 
 permissions:
   contents: read
@@ -220,20 +233,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1
-        with:
-          key: tidy-${{ runner.os }}
-
-      - name: Install clang-tidy
-        run: sudo apt-get install -y -qq clang-tidy-18
-
-      # 构建 clang-debug 仅为获得 compile_commands.json（无需测试）
-      - name: Conan install + build (clang-debug)
+      # 只为取得 compile_commands.json（configure 阶段即生成，
+      # CMAKE_EXPORT_COMPILE_COMMANDS=ON）：完整编译对静态分析是纯浪费，
+      # 无编译可加速，ccache 也一并省去。run-build=false 详见 conan-build action。
+      - name: Conan install + configure (clang-debug)
         uses: ./.github/actions/conan-build
         with:
           preset: clang-debug
           conan-build-type: Debug
+          run-build: 'false'
+
+      - name: Install clang-tidy
+        run: sudo apt-get install -y -qq clang-tidy-18
 
       - name: Run clang-tidy on production sources
         run: |
@@ -241,13 +252,11 @@ jobs:
           # 只对 src/ 下的生产源做静态分析（tests 排除，HeaderFilterRegex
           # 已限定 src|include）。.clang-tidy 设 WarningsAsErrors='*'，
           # 任一告警即失败（门禁语义）。
-          failed=0
-          while IFS= read -r f; do
-            if ! clang-tidy-18 -p build/clang-debug "$f" 2>&1; then
-              failed=1
-            fi
-          done < <(find src -name '*.cpp' | sort)
-          exit $failed
+          # 每核一个 clang-tidy 进程并行分析；任一文件失败时 xargs 以 123
+          # 退出，整体保持失败。并行输出按行交错，但每条告警自带文件路径，
+          # 定位不受影响。
+          find src -name '*.cpp' | sort | xargs -P "$(nproc)" -n 1 \
+            sh -c 'exec clang-tidy-18 -p build/clang-debug "$1"' _
 
   notes:
     runs-on: ubuntu-24.04
