@@ -96,4 +96,7 @@ runs:
     - name: Configure only
       if: inputs.run-build == 'false'
       shell: bash
-      run: cmake --preset ${{ inputs.preset }}
+      # CMake 3.28 + Clang 会为 C++23 生成模块扫描响应文件（*.modmap）；只配置
+      # 不构建时这些文件不存在，clang-tidy 读取 compile_commands.json 会报
+      # “no such file or directory: @...o.modmap”。lint 不需要模块扫描，显式关闭。
+      run: cmake --preset ${{ inputs.preset }} -DCMAKE_CXX_SCAN_FOR_MODULES=OFF

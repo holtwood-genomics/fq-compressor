@@ -26,6 +26,8 @@ namespace {
 #endif
 
 constexpr std::uint64_t kBytesPerMiB = 1024ULL * 1024ULL;
+constexpr std::uint64_t kMaxCompressDefaultBlockBases = 4'000'000;
+constexpr int kMaxCompressDefaultZstdLevel = 19;
 
 struct GlobalOptions {
     std::uint64_t memoryLimitMiB = std::uint64_t{16} * 1024;
@@ -59,9 +61,9 @@ struct MaxCompressOptions {
     std::string input;
     std::string output;
     std::string profile = "auto";
-    std::uint64_t blockBases = 4'000'000;
+    std::uint64_t blockBases = kMaxCompressDefaultBlockBases;
     std::uint64_t maxBlockMiB = 128;
-    int zstdLevel = 19;
+    int zstdLevel = kMaxCompressDefaultZstdLevel;
     bool force = false;
 };
 
@@ -228,7 +230,7 @@ auto run(int argc, char* argv[]) -> int {
         ->check(CLI::IsMember({"auto", "illumina", "ont", "pacbio-hifi", "pacbio-clr"}));
     maxCompressCommand
         ->add_option("--block-bases", maxCompress.blockBases, "Target bases per quality block")
-        ->default_val(4'000'000)
+        ->default_val(kMaxCompressDefaultBlockBases)
         ->check(CLI::PositiveNumber);
     maxCompressCommand
         ->add_option("--max-block-mib", maxCompress.maxBlockMiB, "Maximum raw block size in MiB")
@@ -236,7 +238,7 @@ auto run(int argc, char* argv[]) -> int {
         ->check(CLI::PositiveNumber);
     maxCompressCommand
         ->add_option("--zstd-level", maxCompress.zstdLevel, "zstd level for ID/sequence streams")
-        ->default_val(19)
+        ->default_val(kMaxCompressDefaultZstdLevel)
         ->check(CLI::Range(1, fqc::format::kMaxZstdLevel));
     maxCompressCommand->add_flag("-f,--force", maxCompress.force, "Overwrite an existing output");
 

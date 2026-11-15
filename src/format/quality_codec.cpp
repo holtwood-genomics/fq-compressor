@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <limits>
+#include <memory>
 #include <utility>
 
 #include "fqzcomp_qual.h"
@@ -15,6 +16,20 @@ namespace fqc::format {
 namespace {
 
 using Bytes = std::vector<std::uint8_t>;
+
+constexpr std::uint8_t kQualityOffset = 33;
+constexpr std::uint8_t kMaxQualityValue = 93;
+
+// fqzcomp 的 C API 返回 malloc 分配的缓冲区；用 unique_ptr 统一释放，避免
+// 在多个错误分支重复 std::free。
+struct FreeDeleter {
+    void operator()(char* pointer) const noexcept {
+        // NOLINTNEXTLINE(cppcoreguidelines-no-malloc)
+        std::free(pointer);
+    }
+};
+
+using FqzBuffer = std::unique_ptr<char, FreeDeleter>;
 
 void appendVarint(Bytes& output, std::uint64_t value) {
     while (value >= 0x80U) {
@@ -56,7 +71,8 @@ auto compressFqzQuality(std::span<const ReadRecord> records) -> Result<FqzQualit
                 return makeError<FqzQualityResult>(ErrorCode::kUsageError,
                                                    "invalid quality byte in fqzcomp block");
             }
-            values.push_back(static_cast<std::uint8_t>(static_cast<unsigned char>(value) - 33U));
+            values.push_back(
+                static_cast<std::uint8_t>(static_cast<unsigned char>(value) - kQualityOffset));
         }
     }
 
@@ -70,13 +86,12 @@ auto compressFqzQuality(std::span<const ReadRecord> records) -> Result<FqzQualit
     for (const int strategy : {0, 1}) {
         std::vector<char> input(values.begin(), values.end());
         std::size_t compressedSize = 0;
-        auto* compressed =
-            fqz_compress(4, &slice, input.data(), input.size(), &compressedSize, strategy, nullptr);
-        if (compressed == nullptr) {
+        const FqzBuffer compressed(fqz_compress(
+            4, &slice, input.data(), input.size(), &compressedSize, strategy, nullptr));
+        if (!compressed) {
             continue;
         }
-        Bytes candidate(compressed, compressed + compressedSize);
-        std::free(compressed);
+        Bytes candidate(compressed.get(), compressed.get() + compressedSize);
         if (!haveBest || candidate.size() < best.bytes.size()) {
             best.bytes = std::move(candidate);
             best.strategy = strategy;
@@ -100,13 +115,15 @@ auto decompressFqzQuality(std::span<const std::uint8_t> payload,
     }
     std::vector<int> lengths(recordCount);
     std::size_t restoredSize = 0;
-    auto* restored =
-        fqz_decompress(const_cast<char*>(reinterpret_cast<const char*>(payload.data())),
-                       payload.size(),
-                       &restoredSize,
-                       lengths.data(),
-                       static_cast<int>(lengths.size()));
-    if (restored == nullptr) {
+    // fqz_decompress 的 C API 接收 char* 但只读；payload 的 const 语义由调用方保证。
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-const-cast)
+    auto* mutablePayload = const_cast<char*>(reinterpret_cast<const char*>(payload.data()));
+    const FqzBuffer restored(fqz_decompress(mutablePayload,
+                                            payload.size(),
+                                            &restoredSize,
+                                            lengths.data(),
+                                            static_cast<int>(lengths.size())));
+    if (!restored) {
         return makeError<std::vector<std::uint8_t>>(ErrorCode::kFormatError,
                                                     "fqzcomp payload failed to decode");
     }
@@ -117,13 +134,11 @@ auto decompressFqzQuality(std::span<const std::uint8_t> payload,
     for (const int length : lengths) {
         if (length < 0 || static_cast<std::size_t>(length) > maxRawBytes ||
             !checkedAdd(total, static_cast<std::size_t>(length))) {
-            std::free(restored);
             return makeError<std::vector<std::uint8_t>>(ErrorCode::kFormatError,
                                                         "fqzcomp length is invalid");
         }
     }
     if (total != restoredSize) {
-        std::free(restored);
         return makeError<std::vector<std::uint8_t>>(ErrorCode::kFormatError,
                                                     "fqzcomp output size disagrees with lengths");
     }
@@ -135,17 +150,15 @@ auto decompressFqzQuality(std::span<const std::uint8_t> payload,
         const auto size = static_cast<std::size_t>(length);
         appendVarint(raw, size);
         for (std::size_t i = 0; i < size; ++i) {
-            const auto value = static_cast<unsigned char>(restored[offset + i]);
-            if (value > 93U) {
-                std::free(restored);
+            const auto value = static_cast<unsigned char>(restored.get()[offset + i]);
+            if (value > kMaxQualityValue) {
                 return makeError<std::vector<std::uint8_t>>(ErrorCode::kFormatError,
                                                             "quality value is out of range");
             }
-            raw.push_back(static_cast<std::uint8_t>(value + 33U));
+            raw.push_back(static_cast<std::uint8_t>(value + kQualityOffset));
         }
         offset += size;
     }
-    std::free(restored);
     return raw;
 }
 

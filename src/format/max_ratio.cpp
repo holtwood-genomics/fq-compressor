@@ -30,6 +30,7 @@ constexpr std::uint32_t kBlockMagic = 0x424D5146U;   // "FQMB" little-endian
 constexpr std::uint32_t kFooterMagic = 0x464D5146U;  // "FQMF" little-endian
 constexpr std::uint16_t kGlobalHeaderSize = 32;
 constexpr std::uint32_t kBlockHeaderSize = 88;
+constexpr std::uint32_t kBlockHeaderChecksumTrailerSize = 12;
 constexpr std::uint32_t kFooterSize = 40;
 constexpr std::uint8_t kIdCodecZstd = 1;
 constexpr std::uint8_t kSequenceCodecPackedZstd = 1;
@@ -366,6 +367,9 @@ auto MaxArchiveReader::open() -> Result<MaxArchiveMetadata> {
     return metadata_;
 }
 
+// 二进制块解析器；长度、magic、checksum 与内存预算校验集中在一处，拆分会引入
+// 额外状态传递。保持单函数并显式豁免复杂度阈值。
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 auto MaxArchiveReader::readRawBlock() -> Result<std::optional<RawBlock>> {
     if (!opened_) {
         FQC_TRY(open());
@@ -402,10 +406,10 @@ auto MaxArchiveReader::readRawBlock() -> Result<std::optional<RawBlock>> {
             return makeError<std::optional<RawBlock>>(ErrorCode::kIOError,
                                                       "failed while checking fqc-max/v1 footer");
         }
-        Footer parsed{.blockCount = blockCount,
-                      .recordCount = recordCount,
-                      .totalBases = totalBases,
-                      .globalChecksum = checksum};
+        const Footer parsed{.blockCount = blockCount,
+                            .recordCount = recordCount,
+                            .totalBases = totalBases,
+                            .globalChecksum = checksum};
         FQC_TRY(validateFooter(parsed));
         footer_ = parsed;
         stats_.encodedBytes += footer.size();
@@ -441,7 +445,8 @@ auto MaxArchiveReader::readRawBlock() -> Result<std::optional<RawBlock>> {
 
     if (headerSize != kBlockHeaderSize || blockId != stats_.blockCount || recordCount == 0 ||
         qualityCodec > kBlockQualityCodecFqz || qualityStrategy > 3 ||
-        XXH64(header.data(), kBlockHeaderSize - 12, 0) != headerChecksum) {
+        XXH64(header.data(), kBlockHeaderSize - kBlockHeaderChecksumTrailerSize, 0) !=
+            headerChecksum) {
         return makeError<std::optional<RawBlock>>(ErrorCode::kFormatError,
                                                   "invalid fqc-max/v1 block header");
     }

@@ -178,9 +178,12 @@ private:
         if (!record->has_value()) {
             break;
         }
-        bases += (*record)->sequence.size();
-        logicalBytes += canonicalFastqBytes(**record);
-        block.push_back(std::move(**record));
+        // record 已由 has_value() 保证 engaged；检查器无法跨 Result<optional> 推导。
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
+        auto& value = **record;
+        bases += value.sequence.size();
+        logicalBytes += canonicalFastqBytes(value);
+        block.push_back(std::move(value));
     }
     return block;
 }
@@ -263,6 +266,8 @@ auto MaxRatioEngine::decompress(const MaxDecompressionRequest& request) -> Resul
         if (!block->has_value()) {
             break;
         }
+        // block 已由 has_value() 保证 engaged；检查器无法跨 Result<optional> 推导。
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         for (const auto& record : **block) {
             logicalBytes += canonicalFastqBytes(record);
             FQC_TRY(writeFastqRecord(*output, record));
@@ -292,6 +297,8 @@ auto MaxRatioEngine::verify(const std::filesystem::path& inputPath,
         if (!block->has_value()) {
             break;
         }
+        // block 已由 has_value() 保证 engaged；检查器无法跨 Result<optional> 推导。
+        // NOLINTNEXTLINE(bugprone-unchecked-optional-access)
         for (const auto& record : **block) {
             logicalBytes += canonicalFastqBytes(record);
         }

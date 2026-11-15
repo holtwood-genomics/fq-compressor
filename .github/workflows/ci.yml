@@ -76,7 +76,10 @@ jobs:
           # 2) alloc_dealloc_mismatch 关闭：异常对象在项目代码（ASan 插桩）中经
           #    operator new 分配，由未插桩的系统 libc++18 用 free 释放，触发
           #    系统性误报（本地 libc++19 不触发）；其余 ASan/UBSan 检查保持启用。
-          ASAN_OPTIONS: detect_leaks=0:alloc_dealloc_mismatch=0
+          # 3) container-overflow 关闭：GTest 1.17.0 在 libc++18 的静态注册路径
+          #    （UnitTestFilter 析构）触发容器注解误报；本地 clang-21 ASan 仍开启
+          #    该检查。CI 只关闭这一项以避开 GTest 误报。
+          ASAN_OPTIONS: detect_leaks=0:alloc_dealloc_mismatch=0:detect_container_overflow=0
         run: ./scripts/test.sh clang-asan
 
   thread-sanitizer:

@@ -298,6 +298,12 @@
 
 ### 构建
 
+- **CI clang-tidy/sanitizer 门禁恢复**：clang-tidy 的“只配置”路径关闭 C++ 模块扫描，
+  避免 `@...o.modmap` 不存在；max-ratio 新代码的魔数、const、optional 解引用和
+  fqzcomp `malloc` 缓冲区按仓库规则收敛；CI ASan 仅关闭 GTest 1.17.0 + libc++18
+  静态注册路径的 container-overflow 误报，本地 clang-21 ASan 仍开启该检查。→ 详见
+  `.agents/notes/implemented/process/2026-11-15-ci-module-scan-and-gtest-asan-false-positive.md`
+
 - **Release workflow 的第三方 Action 固定到 commit SHA**：`checkout`、
   `ccache-action`、`action-gh-release` 由可移动 tag 改为 40 位 SHA（保留
   版本注释），避免 tag 被重指后以 `contents: write` 权限执行未审计代码；

@@ -36,7 +36,7 @@
 | `./scripts/test.sh clang-debug` | 22/22 passed |
 | `./scripts/test.sh clang-asan` | 22/22 passed；ASan/UBSan 无报告 |
 | `./scripts/lint.sh format-check` | clang-format-18 passed |
-| `./scripts/notes.sh verify` | 33 notes passed；0 archived |
+| `./scripts/notes.sh verify` | 34 notes passed；0 archived |
 | `shellcheck scripts/fetch_real_wgs_ref_bench.sh` | passed |
 | `git diff --check` | passed |
 | `python3 -m json.tool docs/max-ratio-baselines/datasets.json` | passed |
