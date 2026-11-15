@@ -131,7 +131,8 @@ varint(记录数)
 > [docs/max-ratio-baselines/2026-11-15-quality-codecs.md](docs/max-ratio-baselines/2026-11-15-quality-codecs.md)。
 > 当前 CLI 有实验 `max-compress` 子命令与 `fqc-max/v1` 容器；参考路线另有开发工具
 > `fqc_ref_archive` / `fqc-max-ref/v1`。`--max-ratio` 顶层开关、内置 mapper/BAM、Phase 3
-> 伪基因组与最终逐字节格式仍未实现，Phase 2 真实 30× WGS 尚未验收。
+> 伪基因组与最终逐字节格式仍未实现；真实 WGS R1 头部 + 完整 hg38 小切片已完成，
+> 完整 30× WGS 与 paired-end 尚未验收。
 
 **无损边界**：这里的"无损"指**字段级**无损——ID/sequence/quality 的字节序列在
 压缩-解压往返后逐字节保留。文件级的逐字节往返（`cmp` 一致）还要求输入为 LF-only
@@ -231,9 +232,13 @@ Footer 的滚动校验和把每帧的 8 字节校验和依次喂入全局 XXH64�
   3× 双端 150 bp 上 R1/R2 为 792,217 / 796,633 B（21.993× / 21.871× raw），
   mapped 49,998/50,000、literal 2/0、clipped 51/44、indel 753/745；`verify`/`cmp`
   通过。参考不计入、恒定 Q23、不支持 `S/H/N/P`，是 Phase 2 机制验证，不是人类 30×
-  WGS 结论。Phase 2.1 的自适应 ID front coding（`idCodec=2`）在真实 WGS/NovaSeq 头部
-  ID 探针上约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR 合成 R1 为
-  296,082 B（59.781× raw），同样是机制验证。见
+  WGS 结论。真实 `SRR14724532` R1 头部 298,974 reads + 完整 hg38 参考上，归档
+  **4,547,935 B（21.974× raw）**，mapped 296,343、literal 2,631，quality/alignment/
+  ID 三路为 2,181,008/2,352,120/3,701 B；`verify` + `cmp` 通过，重复压缩 SHA 一致。
+  Phase 2.1 的自适应 ID front coding（`idCodec=2`）在真实 WGS/NovaSeq 头部 ID 探针上
+  约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR 合成 R1 为 296,082 B
+  （59.781× raw）。见
+  [真实 WGS 基线](docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)、
   [Phase 2.2 基线](docs/max-ratio-baselines/2026-11-15-ref-cigar.md)、
   [Phase 2 基线](docs/max-ratio-baselines/2026-11-15-ref-container.md)、
   [ID codec 基线](docs/max-ratio-baselines/2026-11-15-id-codec.md)、

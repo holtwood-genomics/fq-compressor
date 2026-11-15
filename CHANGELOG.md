@@ -4,6 +4,21 @@
 
 ### 新增
 
+- **真实 WGS 参考归档验收（`SRR14724532` R1 + 完整 hg38）**：用 298,974 条真实 WGS
+  R1 头部 reads（99,934,080 B）和完整 UCSC hg38 参考，完成
+  `FASTQ + PAF + external reference → fqc-max-ref/v1 → verify → decompress → cmp`。
+  修复 soft-masked 参考小写 `a/c/g/t` 被误判为 mismatch 的问题后，mapped 从
+  109,476/298,974 升到 **296,343/298,974（99.1%）**，归档 **4,547,935 B
+  （21.974× raw）**；quality 2,181,008 B、alignment 2,352,120 B、ID 3,701 B；
+  `verify` 与 `cmp` 通过，重复压缩逐字节一致。同一切片 gzip -6 为 21,097,162 B
+  （4.737×）、zstd -19 16,463,409 B（6.070×）、当前 fast 路径 16,811,413 B
+  （5.944×）、CRAM 5,929,273 B（16.854×）。**边界**：PAF/参考不计入主口径；
+  若计入 PAF 为 1.865×，若把完整 3.27 GB 参考计入该小切片为 0.0305×；这是单 R1
+  头部，不是完整 30× run、paired-end 或外部工具同数据结论。→ 详见
+  `docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md`、
+  `docs/max-ratio-one-pager.md`、
+  `.agents/notes/implemented/bug-fix/2026-11-15-softmasked-reference-case.md`
+
 - **Phase 2.2 `fqc-max-ref/v1` clip/indel CIGAR 编码**：在既有 per-read flags 上增加
   `EXTENDED` bit，支持 PAF `M/=/X/I/D` 与 `queryStart/queryEnd` 表达的左右 clip；I 存
   base code，D 不存序列，负链在 reverse-complement 后的 aligned query 上执行 CIGAR，
@@ -315,7 +330,7 @@
   `max-ref`（绝对压缩比优先）→ Phase 3 无参 `max-ref-free` → Phase 4 速度/内存。
   当前 `fqc-sequential/v2` fast 模式与默认 CLI 行为不变；Phase 0 探针/数据集 manifest、
   Phase 1 质量 codec 探针/实验容器 `fqc-max/v1`、Phase 2 PAF 参考原型
-  `fqc-max-ref/v1` 已实现；Phase 3 与最终格式未实现，Phase 2 真实 30× WGS 未验收。
+  `fqc-max-ref/v1` 已实现；Phase 3 与最终格式未实现，Phase 2 完整 30× WGS 仍未验收（R1 头部小切片见顶部条目）。
   → 详见 `docs/max-ratio-design.md`、`docs/decisions/0003-max-ratio-mode.md`、
   `docs/max-ratio-baselines/2026-11-15-quality-codecs.md`、
   `docs/max-ratio-baselines/2026-11-15-max-container.md`、

@@ -4,6 +4,7 @@
 
 #include "ref_archive.h"
 
+#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
@@ -151,6 +152,43 @@ TEST(RefArchiveTest, RoundTripsMappedAndLiteralReads) {
     EXPECT_EQ(verified->records, 5U);
     EXPECT_EQ(verified->mapped, 3U);
     EXPECT_EQ(verified->literal, 2U);
+
+    const auto decompressed = decompress(archivePath, referencePath, restoredPath);
+    ASSERT_TRUE(decompressed) << decompressed.error().message;
+    EXPECT_EQ(readFile(restoredPath), fixture.fastq);
+}
+
+TEST(RefArchiveTest, NormalizesSoftMaskedReferenceCase) {
+    auto dir = makeTempDir();
+    const auto fixture = makeFixture();
+    const auto referencePath = dir.path / "reference.fa";
+    const auto inputPath = dir.path / "input.fastq";
+    const auto pafPath = dir.path / "input.paf";
+    const auto archivePath = dir.path / "output.fqmr";
+    const auto restoredPath = dir.path / "restored.fastq";
+
+    auto lowercase = fixture.reference;
+    for (auto& base : lowercase) {
+        base = static_cast<char>(std::tolower(static_cast<unsigned char>(base)));
+    }
+    writeFile(referencePath, ">chr1\n" + lowercase + "\n");
+    writeFile(inputPath, fixture.fastq);
+    writeFile(pafPath, fixture.paf);
+
+    const auto compressed = compress({.inputPath = inputPath,
+                                      .pafPath = pafPath,
+                                      .referencePath = referencePath,
+                                      .outputPath = archivePath,
+                                      .blockBases = 1000,
+                                      .maxMismatches = 8,
+                                      .forceOverwrite = true});
+    ASSERT_TRUE(compressed) << compressed.error().message;
+    EXPECT_EQ(compressed->mapped, 3U);
+    EXPECT_EQ(compressed->literal, 2U);
+
+    const auto verified = verify(archivePath, referencePath);
+    ASSERT_TRUE(verified) << verified.error().message;
+    EXPECT_EQ(verified->mapped, 3U);
 
     const auto decompressed = decompress(archivePath, referencePath, restoredPath);
     ASSERT_TRUE(decompressed) << decompressed.error().message;

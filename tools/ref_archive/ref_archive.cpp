@@ -295,6 +295,15 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     return digest;
 }
 
+[[nodiscard]] auto normalizeReferenceBase(char base) -> char {
+    // UCSC/Ensembl 的 soft-masked FASTA 用 a/c/g/t 表示重复区；比对坐标和 read 都是
+    // 大小写不敏感语义，必须在进入 mismatch 计算前统一成大写。
+    if (base >= 'a' && base <= 'z') {
+        return static_cast<char>(base - ('a' - 'A'));
+    }
+    return base;
+}
+
 [[nodiscard]] auto loadReference(const std::filesystem::path& path) -> Result<Reference> {
     std::ifstream input(path, std::ios::binary);
     if (!input) {
@@ -326,7 +335,9 @@ void appendVarint(Bytes& output, std::uint64_t value) {
             return makeError<Reference>(ErrorCode::kFormatError,
                                         "reference sequence before first header");
         }
-        current->sequence += line;
+        for (const auto base : line) {
+            current->sequence.push_back(normalizeReferenceBase(base));
+        }
     }
     if (!input.eof()) {
         return makeError<Reference>(ErrorCode::kIOError, "failed to read reference");

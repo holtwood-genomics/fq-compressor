@@ -48,7 +48,7 @@
 | Command | Status | Summary |
 |---|---|---|
 | `./scripts/build.sh clang-debug` | passed | 构建 `fqc_ref_archive` |
-| `ctest --test-dir build/clang-debug -R ref_archive_test` | passed | 9/9 cases |
+| `ctest --test-dir build/clang-debug -R ref_archive_test` | passed | 10/10 cases（含真实 soft-mask 回归） |
 | `./scripts/test.sh clang-debug` | passed | 22/22 CTest |
 | `./scripts/test.sh clang-asan` | passed | 22/22 CTest；ASan/UBSan 无报告 |
 | `./scripts/lint.sh format-check` | passed | clang-format-18 |
@@ -58,10 +58,28 @@
 | `cmp` | passed | restored FASTQ |
 | legacy Phase 2 verify | passed | 827,688 / 331,553 B archives |
 
+## Follow-up: real WGS R1 head
+
+2026-11-15 追加真实数据验收：
+
+- `SRR14724532` R1 头部 298,974 reads + 完整 UCSC hg38；
+- 归档 `4,547,935 B`（21.974× raw），mapped 296,343 / literal 2,631，
+  clipped 11,220 / indel 10,181；
+- quality 2,181,008 B、alignment 2,352,120 B、ID 3,701 B；
+- `verify` + `cmp` 通过，重复压缩 SHA 一致；
+- 发现并修复 soft-masked 参考大小写导致的 mismatch 误判；
+- 参考/PAF 不计入；这是单 R1 头部，不是完整 30× WGS。
+
+证据见
+[2026-11-15-real-wgs-srr14724532.md](../../../docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)
+与
+[2026-11-15-softmasked-reference-case.md](../../../.agents/notes/implemented/bug-fix/2026-11-15-softmasked-reference-case.md)。
+
 ## Notes
 
 - 21.99× / 21.87× 是 5 Mb 合成参考 + wgsim 3× + 恒定 Q23 的机制验证，不是人类 30× WGS；
   参考不计入、PAF 不计入。
+- 后续真实 WGS R1 头部结果为 21.974×；仍不是完整 30×。
 - R1 仍有 2 条 literal，原因是 PAF 中没有这两条 read 的 primary 比对。
 - 没有 S/H/N/P、长读 spliced alignment、BAM/CRAM、内置 mapper、参考嵌入、SHA-256、
   paired-end 联合、正式格式冻结或速度门禁。

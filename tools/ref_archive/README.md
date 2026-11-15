@@ -47,7 +47,8 @@ FASTQ + PAF sidecar + external reference FASTA
 - `queryStart < queryEnd <= readLength`，CIGAR 的 query/target 消费量必须与 PAF 坐标一致。
 
 `S/H/N/P`、空 CIGAR、零长度、超过 256 个操作或坐标不一致的 read 自动回退 literal，不报错。
-`--max-mismatches` 只限制 `M/=/X` 内的替换数，indel 不是替换。
+`--max-mismatches` 只限制 `M/=/X` 内的替换数，indel 不是替换。参考 FASTA 的 soft-mask
+小写 `a/c/g/t` 在加载时统一为大写；mismatch、CIGAR 重建和参考摘要都使用归一化序列。
 
 ## 格式摘要
 
@@ -75,12 +76,14 @@ XXH64，不是最终设计要求的 SHA-256，不能把它当密码学身份认�
 完整命令、输入 SHA、归档 SHA、mapped/literal/clipped/indel 计数与复现实验见：
 
 - Phase 2 基础：[`docs/max-ratio-baselines/2026-11-15-ref-container.md`](../../docs/max-ratio-baselines/2026-11-15-ref-container.md)；
-- Phase 2.2 CIGAR：[`docs/max-ratio-baselines/2026-11-15-ref-cigar.md`](../../docs/max-ratio-baselines/2026-11-15-ref-cigar.md)。
+- Phase 2.2 CIGAR：[`docs/max-ratio-baselines/2026-11-15-ref-cigar.md`](../../docs/max-ratio-baselines/2026-11-15-ref-cigar.md)；
+- 真实 WGS R1 + 完整 hg38：[`docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md`](../../docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)。
 
 合成数据上 Phase 2.2 的 R1/R2 为 **792,217 / 796,633 B**，约 **21.993× / 21.871× raw**；
 mapped 分别为 49,998/50,000，literal 2/0，clipped 51/44，indel 753/745；`verify` + `cmp`
-通过。这是 5 Mb 随机参考、3× 覆盖、恒定 Q23 质量的机制验证，不是人类 30× WGS 的压缩比
-结论。
+通过。真实 WGS R1 头部 298,974 reads + 完整 hg38 上，归档 **4,547,935 B（21.974× raw）**，
+mapped 296,343、literal 2,631；quality/alignment/ID 为 2,181,008/2,352,120/3,701 B。
+两者都是参考外部、PAF 外部、非完整 30× WGS 的机制/小切片结果，不能直接外推为产品比例。
 
 ID codec 的真实验证、结构化 ID 合成实验与兼容性回归见
 [`docs/max-ratio-baselines/2026-11-15-id-codec.md`](../../docs/max-ratio-baselines/2026-11-15-id-codec.md)；

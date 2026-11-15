@@ -22,7 +22,7 @@
 
 | Track | Evidence | Status |
 |---|---|---|
-| `max-ratio-research` | [docs/max-ratio-design.md](../docs/max-ratio-design.md), [datasets.md](../docs/max-ratio-baselines/datasets.md), [quality codecs](../docs/max-ratio-baselines/2026-11-15-quality-codecs.md), [max container](../docs/max-ratio-baselines/2026-11-15-max-container.md), [reference prototype](../docs/max-ratio-baselines/2026-11-15-ref-container.md), [ID codec](../docs/max-ratio-baselines/2026-11-15-id-codec.md), [CIGAR baseline](../docs/max-ratio-baselines/2026-11-15-ref-cigar.md), [Phase 1 container contract](changes/2026-11-15-max-ratio-phase1-container/design.md), [Phase 2 reference contract](changes/2026-11-15-max-ratio-phase2-ref/design.md), [Phase 2.1 ID codec contract](changes/2026-11-15-max-ratio-phase2-id-codec/design.md), [Phase 2.2 CIGAR contract](changes/2026-11-15-max-ratio-phase2-cigar/design.md), [tools/ratio_probe/README.md](../tools/ratio_probe/README.md), [tools/quality_probe/README.md](../tools/quality_probe/README.md), [tools/ref_archive/README.md](../tools/ref_archive/README.md) | Phase 0 probe/manifests done; Phase 1 quality gate and experimental container done; Phase 2 PAF reference prototype, adaptive ID codec and clip/indel CIGAR done on synthetic data; real 30x WGS and Phase 3 pending |
+| `max-ratio-research` | [docs/max-ratio-design.md](../docs/max-ratio-design.md), [one-pager](../docs/max-ratio-one-pager.md), [datasets.md](../docs/max-ratio-baselines/datasets.md), [quality codecs](../docs/max-ratio-baselines/2026-11-15-quality-codecs.md), [max container](../docs/max-ratio-baselines/2026-11-15-max-container.md), [reference prototype](../docs/max-ratio-baselines/2026-11-15-ref-container.md), [ID codec](../docs/max-ratio-baselines/2026-11-15-id-codec.md), [CIGAR baseline](../docs/max-ratio-baselines/2026-11-15-ref-cigar.md), [real WGS baseline](../docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md), [Phase 1 container contract](changes/2026-11-15-max-ratio-phase1-container/design.md), [Phase 2 reference contract](changes/2026-11-15-max-ratio-phase2-ref/design.md), [Phase 2.1 ID codec contract](changes/2026-11-15-max-ratio-phase2-id-codec/design.md), [Phase 2.2 CIGAR contract](changes/2026-11-15-max-ratio-phase2-cigar/design.md), [tools/ratio_probe/README.md](../tools/ratio_probe/README.md), [tools/quality_probe/README.md](../tools/quality_probe/README.md), [tools/ref_archive/README.md](../tools/ref_archive/README.md) | Phase 0/1 done; Phase 2 PAF reference prototype, adaptive ID codec and clip/indel CIGAR done; real WGS R1 head + full hg38 done (21.974x, reference/PAF excluded); full 30x WGS, paired-end and Phase 3 pending |
 
 ## External boundaries
 
@@ -49,6 +49,7 @@
 | 2026-11-15 | `max-ratio-phase2-ref` | Experimental `fqc-max-ref/v1` + `fqc_ref_archive`; PAF external reference prototype; synthetic evidence only |
 | 2026-11-15 | `max-ratio-phase2-id-codec` | Adaptive raw/front-coded ID codec in `fqc-max-ref/v1`; synthetic and header-only evidence |
 | 2026-11-15 | `max-ratio-phase2-cigar` | M/=/X/I/D + query clip extension in `fqc-max-ref/v1`; synthetic evidence only |
+| 2026-11-15 | `max-ratio-real-wgs-validation` | Real WGS R1 head + full hg38 validation; soft-mask case normalization; external reference/PAF excluded |
 
 ## Archived changes
 

@@ -136,9 +136,9 @@ A -> B -> C -> D（已完成，同步底座与多级流水线）-> E -> F -> I -
 
 状态：**Phase 0 探针与数据集 manifest、Phase 1 质量 codec 探针、Phase 1 实验容器
 `fqc-max/v1`、Phase 2 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID front coding、
-Phase 2.2 clip/indel CIGAR 已完成；Phase 2 只做了 PAF + external reference 的合成机制验证，
-真实 30× WGS 未验收；
-Phase 3 未实现**。默认 CLI、
+Phase 2.2 clip/indel CIGAR 已完成；Phase 2 已完成 PAF + external reference 的合成机制
+验证和真实 WGS R1 头部 + 完整 hg38 小切片（21.974×，external reference 不计入），
+完整 30× WGS、paired-end 与 Phase 3 未实现**。默认 CLI、
 `fqc-sequential/v2` 格式与 fast 路径不变；`max-compress` / `fqc_ref_archive` 是显式
 实验入口，不是最终 max-ratio。完整设计、证据矩阵与本地实验见 [docs/max-ratio-design.md](max-ratio-design.md)，
 决策见 [ADR-0003](decisions/0003-max-ratio-mode.md)，Phase 0 提案见
@@ -148,7 +148,8 @@ Phase 3 未实现**。默认 CLI、
 实测见 [2026-11-15-max-container.md](max-ratio-baselines/2026-11-15-max-container.md)，
 参考原型实测见 [2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)，
 ID codec 实测见 [2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-codec.md)，
-格式契约见
+真实 WGS 实测见 [2026-11-15-real-wgs-srr14724532.md](max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)，
+一页纸总结见 [max-ratio-one-pager.md](max-ratio-one-pager.md)，格式契约见
 [openspec/changes/2026-11-15-max-ratio-phase1-container](../openspec/changes/2026-11-15-max-ratio-phase1-container/design.md)
 与 [openspec/changes/2026-11-15-max-ratio-phase2-ref](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)
 以及 [ID codec change](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)，
@@ -166,7 +167,7 @@ ID codec 实测见 [2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-co
 |---|---|---|---|
 | Phase 0 | ratio-only benchmark、数据集 SHA、流级统计 | 完成测量面：probe+HiSeq/NovaSeq/WGS 头部快照+WGS 完整 run manifest；完整 run 未下载 | 重复运行字节数稳定；口径可追溯 |
 | Phase 1 | 质量/ID/`+` 行/换行共享底座 | 质量 codec 探针与实验容器 `fqc-max/v1` 完成；`+` 行/CRLF/空 read 逐字节保真未实现 | 质量流 ≥10% 已通过（HiSeq −17.7%、NovaSeq −22.9%、WGS 头部 −23.2% vs zstd19）；实际容器相对 v2 −21.36%～−24.87%，5.087×–8.165× raw |
-| Phase 2 | `max-ref` 参考/BAM sidecar（绝对压缩比优先） | PAF + external reference 原型完成；Phase 2.2 CIGAR 支持 M/=/X/I/D 与左右 clip，合成 5 Mb/3× 数据 21.993×/21.871× raw；自适应 ID front coding 完成，真实 WGS/NovaSeq 头部 ID 探针约 −99%；结构化 ID 合成 59.781× raw（机制验证）；BAM/内置 mapper/S/H/N/P/真实 30× WGS 未完成 | 30× 人类 WGS ≥20× raw、≥5× gzip |
+| Phase 2 | `max-ref` 参考/BAM sidecar（绝对压缩比优先） | PAF + external reference 原型完成；Phase 2.2 CIGAR 支持 M/=/X/I/D 与左右 clip；真实 WGS R1 头部 298,974 reads + 完整 hg38 归档 4,547,935 B（21.974× raw，mapped 296,343），`verify`/`cmp` 通过；自适应 ID front coding 完成，真实 WGS/NovaSeq 头部 ID 探针约 −99%；完整 30×、paired-end、BAM/内置 mapper/S/H/N/P 未完成 | 30× 人类 WGS ≥20× raw、≥5× gzip；真实 R1 头部 21.974×（参考不计入）只是小切片，不是 30× 验收 |
 | Phase 3 | `max-ref-free` 伪基因组/原序引用（无参路线） | 未开始 | 全质量短读 ≥10× raw；分箱 NovaSeq ≥18–20× raw |
 | Phase 4 | 速度/内存优化 | 未开始 | 仅在 Phase 1–3 达标后启动 |
 
@@ -210,5 +211,5 @@ ID codec 实测见 [2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-co
 
 压缩比专项不计入上表；状态见 [docs/max-ratio-design.md](max-ratio-design.md)。当前
 `fqc_ratio_probe`、`fqc_quality_probe` 与 `fqc_ref_archive` 是开发工具；`max-compress`
-是实验 CLI；`--max-ratio` 顶层开关、内置 mapper/BAM、Phase 3 伪基因组与最终格式仍未实现，
-Phase 2 真实 30× WGS 尚未验收。
+是实验 CLI；`--max-ratio` 顶层开关、内置 mapper/BAM、Phase 3 伪基因组与最终格式仍未实现。
+真实 WGS R1 头部小切片已完成，完整 30× run 及 paired-end 尚未验收。

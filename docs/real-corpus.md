@@ -70,3 +70,6 @@ ENA 转写也会抹掉 PacBio 的 `/ccs` 等标记。这类长读现在会标成
 - 压缩比天花板仍在质量流；真实短读比合成好看，真实长读可以更难看。
 - 没有档位因此改默认 codec。
 - 并发课程 A–H 可以收束；下一步若还做，应是新课题，而不是阶段 J。
+- max-ratio 的真实 WGS R1 头部 + 完整 hg38 小切片验收另见
+  [2026-11-15-real-wgs-srr14724532.md](max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)；
+  它依赖 external reference，不能与本文的 fast 路径横比。

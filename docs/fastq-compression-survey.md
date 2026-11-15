@@ -295,15 +295,21 @@ NovaSeq 6000、约 35×、双端 `fastq.gz`，8 线程；Genozip 使用 `--refer
    仍只覆盖 canonical LF，且未处理序列跨 read 冗余。
 4. **序列跨 read 冗余是第二杠杆**：当前 2-bit 已接近下限，只有参考/伪基因组/重排能再降。
    Phase 2 已把参考路线落成开发原型 `fqc_ref_archive`：PAF + external reference +
-   contig/offset/orientation/mismatch/CIGAR；Phase 2.2 支持 `M/=/X/I/D` 与左右 clip，
-   合成 5 Mb 参考/3× 双端数据 R1/R2 为 792,217/796,633 B（21.993×/21.871× raw），
-   mapped 49,998/50,000、literal 2/0，`verify`/`cmp` 通过。但参考不计入、质量恒定、
-   不支持 `S/H/N/P`，不是人类 30× WGS 结论。Phase 2.1 又验证了 ID front coding：真实
-   WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR
-   合成 R1 为 296,082 B（59.781× raw），仍是合成机制验证。
+   contig/offset/orientation/mismatch/CIGAR；Phase 2.2 支持 `M/=/X/I/D` 与左右
+   clip。合成 5 Mb 参考/3× 双端数据 R1/R2 为 792,217/796,633 B（21.993×/21.871× raw），
+   mapped 49,998/50,000、literal 2/0，`verify`/`cmp` 通过。进一步用真实 `SRR14724532`
+   R1 头部 298,974 reads + 完整 hg38 重测，归档 **4,547,935 B（21.974× raw）**，
+   mapped 296,343、literal 2,631；quality/alignment/ID 三路为 2,181,008/2,352,120/3,701 B，
+   说明真实 WGS 的主要矛盾在 quality 与 alignment，不是 ID。参考/PAF 不计入，仍是单
+   R1 头部，不是完整 30× WGS。Phase 2.1 又验证了 ID front coding：真实 WGS/NovaSeq 头部
+   ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR 合成 R1 为
+   296,082 B（59.781× raw），仍是合成机制验证。
 5. **速度后置**：本节的 20×+ 工具大多比 fast 模式慢一个数量级以上；先追压缩比，再谈速度。
 
 ### 9.6 增补来源
+
+- 真实 WGS R1 头部 + 完整 hg38 小切片：
+  [2026-11-15-real-wgs-srr14724532.md](max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)
 
 - Betschart et al., *Sci Rep* 15, 15358 (2025), DOI 10.1038/s41598-025-00491-8。
 - Illumina ORA 技术页与格式说明（序列 0.3–0.5 bits/nt、质量 range coder、ID token 化、

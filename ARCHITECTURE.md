@@ -6,8 +6,8 @@ v1 兼容、索引、随机访问、全局 read 重排序、第二套并行引�
 > 本文描述当前 `fqc-sequential/v2` fast 路径；“不做全局重排序/第二套引擎”是当前 v2 的边界。
 > 2026-11 的 max-ratio 设计草案另开独立引擎与格式族；Phase 0 测量工具、Phase 1 质量
 > codec 探针/实验容器 `fqc-max/v1`、Phase 2 PAF 参考原型 `fqc-max-ref/v1` 已实现；
-> Phase 2 真实 30× WGS 与 Phase 3 未完成。容器/原型与 v2 格式/流水线独立，默认 CLI
-> 不变。见 [docs/max-ratio-design.md](docs/max-ratio-design.md)、
+> 真实 WGS R1 头部 + 完整 hg38 小切片已完成，完整 30× WGS 与 Phase 3 未完成。容器/原型
+> 与 v2 格式/流水线独立，默认 CLI 不变。见 [docs/max-ratio-design.md](docs/max-ratio-design.md)、
 > [质量 codec 基线](docs/max-ratio-baselines/2026-11-15-quality-codecs.md)、
 > [实验容器基线](docs/max-ratio-baselines/2026-11-15-max-container.md) 与
 > [参考原型基线](docs/max-ratio-baselines/2026-11-15-ref-container.md)。
@@ -195,10 +195,13 @@ writer 生命周期，也不引入 DAG 或调度器。handler 返回 `Result<T>`
 reference + PAF sidecar → contig/offset/orientation/mismatch/CIGAR 编码 + literal 回退；
 质量流 fqzcomp/zstd 自适应；解压只需同一参考。Phase 2.2 支持 PAF `M/=/X/I/D` 与左右
 clip，纯 M 仍用旧布局；它在合成 5 Mb/3× 数据上 R1/R2 为 792,217/796,633 B
-（21.993×/21.871× raw），但参考不计入、质量恒定、不支持 `S/H/N/P`，不是人类 30× WGS
-结论。Phase 2.1 在同一 block header 的 `idCodec` 字段增加 front coding：每块在 raw 与
-front-coded ID 逻辑流各自 zstd19 后取较小者；真实 WGS/NovaSeq 头部 ID 探针约 −99%，
-随机 wgsim ID 自动回退 raw。见
+（21.993×/21.871× raw），但参考不计入、质量恒定、不支持 `S/H/N/P`。真实
+`SRR14724532` R1 头部 298,974 reads + 完整 hg38 上，归档 **4,547,935 B（21.974× raw）**，
+mapped 296,343、literal 2,631；quality/alignment/ID 为 2,181,008/2,352,120/3,701 B，
+`verify` + `cmp` 通过。Phase 2.1 在同一 block header 的 `idCodec` 字段增加 front coding：
+每块在 raw 与 front-coded ID 逻辑流各自 zstd19 后取较小者；真实 WGS/NovaSeq 头部 ID
+探针约 −99%，随机 wgsim ID 自动回退 raw。见
+[真实 WGS 基线](docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)、
 [Phase 2.2 基线](docs/max-ratio-baselines/2026-11-15-ref-cigar.md)、
 [Phase 2 基线](docs/max-ratio-baselines/2026-11-15-ref-container.md) 与
 [ID codec 基线](docs/max-ratio-baselines/2026-11-15-id-codec.md)。

@@ -97,7 +97,7 @@
   完整 run 或固定分片快照。
 - 不能把 ENA 的 spot/base count 直接当成本地 FASTQ 字节；本地快照必须另记 SHA-256。
 
-## 5. Phase 2 合成参考机制验证
+## 5. Phase 2 参考机制验证
 
 这不是公共数据集，也不用于声称人类 WGS 压缩比；它只固定 Phase 2 `fqc-max-ref/v1`
 的机制验证输入。参考和 reads 均由固定 seed 生成，命令在 2026-11-15 实际执行。
@@ -159,6 +159,34 @@ minimap2 -x sr -c -t 4 ref5m.fa r2.fq > r2.paf
   [2026-11-15-id-codec.md](2026-11-15-id-codec.md) 与
   [2026-11-15-ref-cigar.md](2026-11-15-ref-cigar.md)。
 
+### 5.2 真实 WGS 参考归档（2026-11-15 增补）
+
+这不是新的公共数据集，而是把上节的真实 WGS R1 头部与完整 UCSC hg38 组合起来，验证
+`fqc-max-ref/v1` 在真实 reads、真实参考和真实 CIGAR 上的行为：
+
+- R1 头部：298,974 reads / 45,145,074 bases / 99,934,080 B；
+- 参考：完整 `hg38.fa` 3,273,481,150 B（gzip 983,659,424 B），external reference；
+- PAF：298,179 条 primary alignment，49,043,976 B；minimap2 2.31-r1302，
+  `-x sr -c --secondary=no`；
+- 归档：4,547,935 B（21.974× raw），mapped 296,343 / literal 2,631，
+  clipped 11,220 / indel 10,181；`verify` 与 `cmp` 通过，重复压缩 SHA 一致。
+
+| 文件 | 字节 | SHA-256 |
+|---|---:|---|
+| `hg38.fa.gz` | 983,659,424 | `c1dd87068c254eb53d944f71e51d1311964fce8de24d6fc0effc9c61c01527d4` |
+| `hg38.fa` | 3,273,481,150 | `5be01555d98347fdb3714dc84c6f77c9d8bc774adcf32c6f7a8fa06f5baf5e51` |
+| `SRR14724532_R1.head.paf` | 49,043,976 | `c33900ac67b0e0d5bad2297767477ecef5408e6cea0313318c44866c4983c935` |
+| `SRR14724532_R1.head.fixed.fqmr` | **4,547,935** | `6f50a3146e018c33fffe6be3a21af9163b8ae1223d1b386f6f440507bb3b647a` |
+
+同一 FASTQ 的对照：gzip -6 21,097,162 B（4.737×）、zstd -19 16,463,409 B（6.070×）、
+当前 fast 路径 16,811,413 B（5.944×）、CRAM 5,929,273 B（16.854×）。CRAM 是 alignment
+container，且同样依赖 external reference，不能与 FASTQ 归档直接做功能等价比较。
+
+**口径警告**：这是 R1 头部，不是完整 35× run；完整 GRCh38 计入小切片时比例只有 0.0305×，
+PAF 计入时 1.865×。参考/PAF 不计入的主口径是 21.974×，不能外推为完整 WGS 产品比例。
+完整命令、字节账和 soft-mask 修复记录见
+[2026-11-15-real-wgs-srr14724532.md](2026-11-15-real-wgs-srr14724532.md)。
+
 ## 6. ENA 元数据查询
 
 可复现查询：
@@ -177,6 +205,7 @@ ENA 页面与文件可能更新；本清单以 2026-11-15 查询结果和本地 
 - `hiseq-hartwig-25k-r1` 只有 25k reads，不能代表 30× WGS。
 - `novaseq-drr174812-r1-head` 是 RNA-Seq 头部子集，不是完整 run，也不是 WGS。
 - `wgs-srr14724532-r1-head` 只有头部约 300k reads；完整 run 未下载，不能代表 35× WGS。
+- §5.2 已完成该头部的完整 hg38 参考归档，但仍不是完整 30× run、paired-end 或外部工具同数据验收。
 - 三个数据集都没有 paired-end 联合压缩、CRLF、IUPAC 或空 read 的完整验收；这些由
   `ratio_probe_test` 的合成 fixture 单独覆盖。
 - 外部 ORA/Genozip/SPRING/PgRC2 数字仍只按调研证据引用，未在本地复测。

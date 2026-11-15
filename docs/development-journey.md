@@ -150,8 +150,13 @@ Phase 2.2 再把 CIGAR 从“只接受纯 M”扩到 `M/=/X/I/D` 与左右 clip�
 扩展记录存 query 范围、操作表、I 的 base code 与 clip；负链在 reverse-complement 后的
 aligned query 上执行 CIGAR。R1/R2 归档因此从 827,688/827,546 B 降到
 792,217/796,633 B，mapped 49,998/50,000、literal 2/0；结构化 ID R1 从 331,553 B 降到
-296,082 B（59.781× raw）。`S/H/N/P`、长读 spliced alignment、BAM/CRAM 与真实 30× WGS
-仍未完成。
+296,082 B（59.781× raw）。
+
+随后用 `SRR14724532` R1 头部 298,974 reads + 完整 UCSC hg38 做真实数据验收：第一次运行
+因 soft-masked 参考的小写碱基只得到 9.741×，修复参考大小写归一化后 mapped 从 109,476
+升到 296,343，归档 **4,547,935 B（21.974× raw）**；quality/alignment/ID 三路为
+2,181,008/2,352,120/3,701 B，`verify` + `cmp` 通过，重复压缩 SHA 一致。完整 30× WGS、
+paired-end、`S/H/N/P`、长读 spliced alignment 与 BAM/CRAM 仍未完成。
 
 但 `--max-ratio` 顶层开关、内置 mapper/BAM、参考嵌入、Phase 3 伪基因组与 `+` 行/CRLF/
 空 read 的逐字节保真仍未实现；两个实验容器/原型都只覆盖 canonical LF FASTQ。

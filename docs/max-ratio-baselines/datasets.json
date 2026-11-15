@@ -132,6 +132,57 @@
       "quality_symbols": 1,
       "status": "synthetic-archive-fixed",
       "warning": "structured-ID mechanism validation only; reference/PAF excluded; not human WGS"
+    },
+    {
+      "id": "real-wgs-srr14724532-r1-hg38",
+      "role": "real-wgs-reference-archive-validation",
+      "accession": "SRR14724532",
+      "study": "PRJNA734598",
+      "instrument": "Illumina NovaSeq 6000",
+      "library_strategy": "WGS",
+      "layout": "PAIRED",
+      "coverage": "approx-35x-full-run; r1-head-subset",
+      "reference": {
+        "name": "UCSC hg38",
+        "fa_gzip_bytes": 983659424,
+        "fa_gzip_sha256": "c1dd87068c254eb53d944f71e51d1311964fce8de24d6fc0effc9c61c01527d4",
+        "fa_bytes": 3273481150,
+        "fa_sha256": "5be01555d98347fdb3714dc84c6f77c9d8bc774adcf32c6f7a8fa06f5baf5e51",
+        "accounting": "external; not counted in primary archive ratio"
+      },
+      "local": {
+        "range": "0-21110783",
+        "gzip_bytes": 21110784,
+        "gzip_sha256": "286836d9d79ad8470ddcd2b395562aa4f25a347e8b424a9bb1ad5c159378b95b",
+        "fastq_bytes": 99934080,
+        "fastq_sha256": "d4f6c8bee191ee8cc5207cca5fb86659a2aaa02e3f493b35f2ed50027ab6e0f4",
+        "paf_bytes": 49043976,
+        "paf_sha256": "c33900ac67b0e0d5bad2297767477ecef5408e6cea0313318c44866c4983c935",
+        "archive_bytes": 4547935,
+        "archive_sha256": "6f50a3146e018c33fffe6be3a21af9163b8ae1223d1b386f6f440507bb3b647a"
+      },
+      "alignment": {
+        "minimap2_version": "2.31-r1302",
+        "command": "-x sr -c --secondary=no",
+        "primary_alignments": 298179,
+        "mapped_reads": 296343,
+        "literal_reads": 2631,
+        "clipped_reads": 11220,
+        "indel_reads": 10181
+      },
+      "comparisons": {
+        "gzip6_bytes": 21097162,
+        "zstd19_bytes": 16463409,
+        "fqc_v2_bytes": 16811413,
+        "cram_bytes": 5929273
+      },
+      "records": 298974,
+      "bases": 45145074,
+      "read_length": 151,
+      "quality_symbols": 4,
+      "mean_q": 35.675848,
+      "status": "r1-head-reference-archive-fixed",
+      "warning": "R1 head only; full 35x run, paired-end and external-tool comparison pending; reference and PAF excluded from primary ratio; CRAM is not a FASTQ byte archive"
     }
   ]
 }

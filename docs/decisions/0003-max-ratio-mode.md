@@ -1,6 +1,6 @@
 # ADR-0003: 最高压缩比作为独立 opt-in 模式
 
-- 状态：**已采纳（设计方向；Phase 0 探针/数据集 manifest、Phase 1 质量 codec 探针与实验容器 `fqc-max/v1`、Phase 2 PAF 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID front coding、Phase 2.2 clip/indel CIGAR 已实现；Phase 2 仅合成机制验证，真实 30× WGS 与 Phase 3 未实现；最终格式未冻结）**
+- 状态：**已采纳（设计方向；Phase 0 探针/数据集 manifest、Phase 1 质量 codec 探针与实验容器 `fqc-max/v1`、Phase 2 PAF 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID front coding、Phase 2.2 clip/indel CIGAR、真实 WGS R1 头部 + 完整 hg38 小切片已实现；完整 30× WGS、paired-end 与 Phase 3 未实现；最终格式未冻结）**
 - 日期：2026-11-14
 - 关联：[docs/max-ratio-design.md](../max-ratio-design.md)、
   [docs/fastq-compression-survey.md](../fastq-compression-survey.md)、
@@ -86,5 +86,6 @@ FQSqueezer、fqxv 等方案表明：要进入 10×–20× 区间，必须改变�
 - Phase 2.1 ID codec 笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md](../../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md)
 - Phase 2 实现笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md](../../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md)
 - 当前仓库状态：`fqc_ratio_probe`、`fqc_quality_probe`、`fqc-max/v1` 实验容器、
-  `fqc_ref_archive` 参考原型、自适应 ID front coding 与 Phase 2.2 CIGAR 已实现；仍无
-  `--max-ratio` 顶层开关、内置 mapper/BAM/参考嵌入、Phase 3 伪基因组或最终格式。
+  `fqc_ref_archive` 参考原型、自适应 ID front coding、Phase 2.2 CIGAR 与真实 WGS R1
+  头部小切片已实现；仍无 `--max-ratio` 顶层开关、内置 mapper/BAM/参考嵌入、完整 30×
+  验收、Phase 3 伪基因组或最终格式。
