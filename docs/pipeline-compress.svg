@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 580" font-family="Microsoft YaHei, PingFang SC, SimHei, sans-serif">
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/></marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="580" fill="#ffffff"/>
+  <text x="32" y="42" font-size="18" font-weight="bold" fill="#111827">fq-compressor 压缩流水线（fqc-sequential/v2）</text>
+  <text x="32" y="64" font-size="12" fill="#6b7280">两条入口路径汇入同一套 encoder / writer 编排；所有队列均为有界 MPMC，源端受 in-flight credit 窗口约束</text>
+  <rect x="790" y="22" width="380" height="52" rx="8" fill="#f9fafb" stroke="#e5e7eb"/>
+  <line x1="804" y1="40" x2="854" y2="40" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <text x="864" y="44" font-size="12" fill="#111827">帧数据流（有界 MPMC 队列）</text>
+  <line x1="804" y1="62" x2="854" y2="62" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="864" y="66" font-size="12" fill="#111827">in-flight credit（源端取得 / 有序端归还）</text>
+  <rect x="30" y="130" width="130" height="96" rx="10" fill="#f9fafb" stroke="#9ca3af" stroke-width="1.5"/>
+  <text x="95.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">主线程</text>
+  <text x="95.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">profile 采样</text>
+  <text x="95.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">≤5 万条 / 512 MiB</text>
+  <text x="95.0" y="206" text-anchor="middle" font-size="11" fill="#6b7280">内存预算推导</text>
+  <rect x="210" y="130" width="180" height="96" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="300.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">parser × K</text>
+  <text x="300.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">字节块切分</text>
+  <text x="300.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">边界对齐：4 行结构回验</text>
+  <text x="300.0" y="206" text-anchor="middle" font-size="11" fill="#6b7280">帧标记 (chunkId, localId)</text>
+  <rect x="440" y="150" width="90" height="56" rx="28.0" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="485.0" y="174" text-anchor="middle" font-size="13" font-weight="bold" fill="#111827">MPMC q1</text>
+  <text x="485.0" y="191" text-anchor="middle" font-size="10" fill="#2563eb">ChunkFrame</text>
+  <rect x="580" y="130" width="190" height="96" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="675.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">encoder × N</text>
+  <text x="675.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">N = min(K, 4)，CPU 密集</text>
+  <text x="675.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">2-bit 打包 · measure</text>
+  <text x="675.0" y="206" text-anchor="middle" font-size="11" fill="#6b7280">逻辑校验和 + zstd × 3</text>
+  <text x="675.0" y="223" text-anchor="middle" font-size="11" fill="#6b7280">乱序完成</text>
+  <rect x="820" y="150" width="90" height="56" rx="28.0" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="865.0" y="174" text-anchor="middle" font-size="13" font-weight="bold" fill="#111827">MPMC q2</text>
+  <text x="865.0" y="191" text-anchor="middle" font-size="10" fill="#2563eb">EncodedFrame</text>
+  <rect x="960" y="130" width="200" height="96" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="1060.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">ChunkOrderer + writer</text>
+  <text x="1060.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">按 (chunk, local) 字典序保序</text>
+  <text x="1060.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">帧头拼装 + 写盘（纯 I/O）</text>
+  <line x1="160" y1="178" x2="208" y2="178" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="390" y1="178" x2="438" y2="178" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="530" y1="178" x2="578" y2="178" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="770" y1="178" x2="818" y2="178" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="910" y1="178" x2="958" y2="178" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <rect x="210" y="330" width="180" height="96" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="300.0" y="352" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">单 reader 顺序解析</text>
+  <text x="300.0" y="372" text-anchor="middle" font-size="11" fill="#6b7280">gzip / stdin / 双端锁步</text>
+  <text x="300.0" y="389" text-anchor="middle" font-size="11" fill="#6b7280">(并行解析不适用，走同一</text>
+  <text x="300.0" y="406" text-anchor="middle" font-size="11" fill="#6b7280">FrameAccumulator 分帧规则)</text>
+  <line x1="390" y1="378" x2="485" y2="378" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <path d="M 485,378 L 485,210" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-dasharray="none" marker-end="url(#arrow-blue)"/>
+  <text x="497" y="300" font-size="11" fill="#2563eb">汇入 q1</text>
+  <path d="M 95,226 L 95,262 L 340,262 L 340,230" fill="none" stroke="#9ca3af" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#arrow-gray)"/>
+  <text x="218" y="256" text-anchor="middle" font-size="10.5" fill="#6b7280">采样记录 = 累积器种子（worker 0）</text>
+  <path d="M 390,158 L 438,158" fill="none" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="414" y="150" text-anchor="middle" font-size="10" fill="#ea580c">admit</text>
+  <path d="M 1010,300 L 1106,300 L 1120,314 L 1120,364 L 1010,364 Z" fill="#f9fafb" stroke="#9ca3af" stroke-width="1.5"/>
+  <path d="M 1106,300 L 1106,314 L 1120,314 Z" fill="#e5e7eb" stroke="#9ca3af" stroke-width="1"/>
+  <text x="1065.0" y="334.0" text-anchor="middle" font-size="13" font-weight="bold" fill="#111827">.fqc 归档</text>
+  <text x="1065.0" y="352.0" text-anchor="middle" font-size="10" fill="#6b7280">顺序帧 + XXH64</text>
+  <line x1="1060" y1="226" x2="1060" y2="296" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <circle cx="465" cy="378" r="6" fill="#ffffff"/>
+  <path d="M 980,226 L 980,480 L 465,480 L 465,384 A 6 6 0 0 1 465,372 L 465,212" fill="none" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="700" y="474" text-anchor="middle" font-size="11" fill="#ea580c">writer 有序提交后归还 credit</text>
+  <text x="32" y="548" font-size="11" fill="#6b7280">源端在帧进入第一条队列前取得 credit；窗口 = 两队列可用容量 + worker 数 + reorder 等待区（详见 ARCHITECTURE.md#执行架构）。帧内存有界：编码前逐帧预检。</text>
+</svg>

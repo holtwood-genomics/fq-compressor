@@ -176,6 +176,22 @@ struct ArchiveFooter {
 [[nodiscard]] auto advanceGlobalChecksum(std::uint64_t current,
                                          std::uint64_t frameChecksum) -> std::uint64_t;
 
+/// Logical checksum over the three uncompressed record streams. This is the
+/// same chained XXH64 used by v2 frames; experimental containers that reuse
+/// v2's stream encoding can share the integrity definition without copying it.
+[[nodiscard]] auto logicalChecksum(std::span<const std::uint8_t> ids,
+                                   std::span<const std::uint8_t> sequences,
+                                   std::span<const std::uint8_t> qualities) -> std::uint64_t;
+
+/// Decode the three uncompressed v2 record streams into validated records.
+/// Exposed for experimental containers that intentionally keep v2's ID,
+/// packed-sequence and quality stream layout while replacing a codec.
+[[nodiscard]] auto decodeLogicalStreams(std::span<const std::uint8_t> ids,
+                                        std::span<const std::uint8_t> sequences,
+                                        std::span<const std::uint8_t> qualities,
+                                        std::uint32_t expectedCount)
+    -> Result<std::vector<ReadRecord>>;
+
 class ArchiveWriter {
 public:
     ArchiveWriter(std::ostream& output, ArchiveOptions options);

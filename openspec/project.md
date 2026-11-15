@@ -18,6 +18,12 @@
 | `format-governance` | `openspec/specs/format-governance/` | Same-name `.fqc` format family coexistence documentation contract |
 | `ci-quality` | `openspec/specs/ci-quality/` | CI quality gates: sanitizers, TSan, fuzz, release build, static analysis, notes |
 
+## Research tracks
+
+| Track | Evidence | Status |
+|---|---|---|
+| `max-ratio-research` | [docs/max-ratio-design.md](../docs/max-ratio-design.md), [datasets.md](../docs/max-ratio-baselines/datasets.md), [quality codecs](../docs/max-ratio-baselines/2026-11-15-quality-codecs.md), [max container](../docs/max-ratio-baselines/2026-11-15-max-container.md), [reference prototype](../docs/max-ratio-baselines/2026-11-15-ref-container.md), [ID codec](../docs/max-ratio-baselines/2026-11-15-id-codec.md), [Phase 1 container contract](changes/2026-11-15-max-ratio-phase1-container/design.md), [Phase 2 reference contract](changes/2026-11-15-max-ratio-phase2-ref/design.md), [Phase 2.1 ID codec contract](changes/2026-11-15-max-ratio-phase2-id-codec/design.md), [tools/ratio_probe/README.md](../tools/ratio_probe/README.md), [tools/quality_probe/README.md](../tools/quality_probe/README.md), [tools/ref_archive/README.md](../tools/ref_archive/README.md) | Phase 0 probe/manifests done; Phase 1 quality gate and experimental container done; Phase 2 PAF reference prototype and adaptive ID codec done on synthetic data; real 30x WGS and Phase 3 pending |
+
 ## External boundaries
 
 - **`fq-compressor-rust`**: shares product name `fqc` and extension `.fqc` but uses a
@@ -30,8 +36,18 @@
 ```bash
 ./scripts/lint.sh format-check
 ./scripts/build.sh clang-debug
-./scripts/test.sh clang-debug
+./scripts/test.sh -p clang-debug
 ```
+
+## Active changes
+
+| Date | Change | Status |
+|---|---|---|
+| 2026-11-14 | `max-ratio-phase0-benchmark` | Phase 0 measurement complete; ready for review; no product format/CLI change |
+| 2026-11-15 | `max-ratio-quality-codec` | Quality codec probe complete; no product format/CLI change |
+| 2026-11-15 | `max-ratio-phase1-container` | Experimental `fqc-max/v1` container and CLI implemented; canonical-LF boundary |
+| 2026-11-15 | `max-ratio-phase2-ref` | Experimental `fqc-max-ref/v1` + `fqc_ref_archive`; PAF external reference prototype; synthetic evidence only |
+| 2026-11-15 | `max-ratio-phase2-id-codec` | Adaptive raw/front-coded ID codec in `fqc-max-ref/v1`; synthetic and header-only evidence |
 
 ## Archived changes
 

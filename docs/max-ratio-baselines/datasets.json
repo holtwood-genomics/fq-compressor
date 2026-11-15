@@ -1,0 +1,137 @@
+{
+  "schema": "fqc-max-ratio-datasets/v1",
+  "generated": "2026-11-15",
+  "datasets": [
+    {
+      "id": "hiseq-hartwig-25k-r1",
+      "role": "full-quality-hiseq-quality-id-baseline",
+      "source_url": "https://raw.githubusercontent.com/hartwigmedical/testdata/master/100k_reads_hiseq/TESTX/TESTX_H7YRLADXX_S1_L001_R1_001.fastq.gz",
+      "local": {
+        "fastq_bytes": 6538676,
+        "fastq_sha256": "de63a088f1a748153e0a42814dbb4e7dd8fb95a01fb2b2bafd51a2e975075058",
+        "gzip_bytes": 1957197,
+        "gzip_sha256": "5c90a41c0fb951013fb7dc876ccbbb4a4dc9ed0526476f3d7c2086f0b9b18198"
+      },
+      "records": 25000,
+      "bases": 2525000,
+      "read_length": 101,
+      "n_bases": 12391,
+      "quality_symbols": 38,
+      "mean_q": 37.261027,
+      "status": "downloaded-and-fixed"
+    },
+    {
+      "id": "novaseq-drr174812-r1-head",
+      "role": "binned-novaseq-quality-baseline",
+      "accession": "DRR174812",
+      "study": "PRJDB8092",
+      "sample": "SAMD00164453",
+      "instrument": "Illumina NovaSeq 6000",
+      "library_strategy": "RNA-Seq",
+      "layout": "PAIRED",
+      "full_run": {
+        "spots": 14723420,
+        "bases": 4417026000,
+        "r1_gzip_bytes": 1026013177,
+        "r1_gzip_md5": "a75001a9d90bfaf18a62d22b74a3514c",
+        "r2_gzip_bytes": 1091492474,
+        "r2_gzip_md5": "764dd3d54294533f0bfbb545185ed27b"
+      },
+      "local": {
+        "range": "0-21110783",
+        "gzip_bytes": 21110784,
+        "gzip_sha256": "23b6941a21236aac60f5e170e9d32ad80d18e5b9642a314c5588711215f38b04",
+        "fastq_bytes": 100272700,
+        "fastq_sha256": "c8c02eccca86ee2a67f7ef84a0d36706f25ec9426dc7b1e531b5686bafb5b40e"
+      },
+      "records": 303610,
+      "bases": 45541500,
+      "read_length": 150,
+      "n_bases": 1259,
+      "quality_symbols": 4,
+      "mean_q": 35.780126,
+      "status": "head-subset-downloaded-and-fixed",
+      "warning": "RNA-Seq head subset; not WGS and not the full run"
+    },
+    {
+      "id": "wgs-srr14724532-r1-head",
+      "role": "deep-wgs-binned-quality-baseline",
+      "accession": "SRR14724532",
+      "study": "PRJNA734598",
+      "instrument": "Illumina NovaSeq 6000",
+      "library_strategy": "WGS",
+      "layout": "PAIRED",
+      "coverage": "approx-35x",
+      "full_run": {
+        "spots": 355791257,
+        "bases": 107448959614,
+        "r1_gzip_bytes": 25019246552,
+        "r1_gzip_md5": "40eb3a20e288a581b23197fb32a5a5cc",
+        "r2_gzip_bytes": 25979206586,
+        "r2_gzip_md5": "9846d10d1eca7c52948cbe5f94d2cdaf"
+      },
+      "local": {
+        "range": "0-21110783",
+        "gzip_bytes": 21110784,
+        "gzip_sha256": "286836d9d79ad8470ddcd2b395562aa4f25a347e8b424a9bb1ad5c159378b95b",
+        "fastq_bytes": 99934080,
+        "fastq_sha256": "d4f6c8bee191ee8cc5207cca5fb86659a2aaa02e3f493b35f2ed50027ab6e0f4"
+      },
+      "records": 298974,
+      "bases": 45145074,
+      "read_length": 150,
+      "n_bases": 831,
+      "quality_symbols": 4,
+      "mean_q": 35.675848,
+      "status": "head-subset-downloaded-and-fixed",
+      "warning": "head subset only; full 35x run not downloaded"
+    },
+    {
+      "id": "synthetic-ref-5m-wgsim",
+      "role": "phase2-reference-mechanism-validation",
+      "source": "generated locally with fixed seed 20261115; wgsim 1.21 + minimap2 2.31-r1302",
+      "reference": {
+        "bytes": 5071439,
+        "sha256": "df2ce24106ef8ab086e74c001a8b01570403e8f2c7d29831ba9a4c63a1ff543b"
+      },
+      "local": {
+        "r1_fastq_bytes": 17423235,
+        "r1_fastq_sha256": "ca35dbdf9dc7886eac5f05bec1184f1ab2cedffcb9959109eb524eeaf6f572bb",
+        "r2_fastq_bytes": 17423235,
+        "r2_fastq_sha256": "c3dcae4be810487baf319764a9e0abfe588b1fbf920d13d8b2e435c3d38808ca",
+        "r1_paf_bytes": 9445200,
+        "r1_paf_sha256": "b50e56723d1994862d23e2de521a27cedef7092c4125c5e9dcfcd84e8f8c7a74",
+        "r2_paf_bytes": 9446372,
+        "r2_paf_sha256": "8851a952e70e2de34fcc992b886b5e46b2adf71329c772bd5de0b0f732b987d1"
+      },
+      "records_per_mate": 50000,
+      "read_length": 150,
+      "bases_per_mate": 7500000,
+      "coverage": "approx-3x-paired",
+      "quality_symbols": 1,
+      "status": "synthetic-input-fixed",
+      "warning": "mechanism validation only; not human WGS and not comparable to ORA/Genozip"
+    },
+    {
+      "id": "synthetic-ref-5m-wgsim-structured-id",
+      "role": "phase2.1-adaptive-id-codec-validation",
+      "derived_from": "synthetic-ref-5m-wgsim",
+      "transformation": "rewrite R1 read IDs to A00123:1:H7YRLADXX:1:1101:<tile>:<x> and rewrite PAF query names by original-ID map; sequences/reference/coordinates/quality unchanged",
+      "local": {
+        "r1_fastq_bytes": 17700000,
+        "r1_fastq_sha256": "f53826400a4b69daaf8072a33d01fb2ecd37f3297599b2997628f0fbeee8baaa",
+        "r1_paf_bytes": 9071979,
+        "r1_paf_sha256": "51ca888a30de942c792ffd5772fb0a4d59ea9e1339a47e8741dd6aca42488da7",
+        "archive_bytes": 331553,
+        "archive_sha256": "0ec4959c5319279b8f4391c6695bb1dd705a734380bccd918153845214af5e12"
+      },
+      "records": 50000,
+      "read_length": 150,
+      "bases": 7500000,
+      "coverage": "approx-3x-single-mate",
+      "quality_symbols": 1,
+      "status": "synthetic-archive-fixed",
+      "warning": "structured-ID mechanism validation only; reference/PAF excluded; not human WGS"
+    }
+  ]
+}

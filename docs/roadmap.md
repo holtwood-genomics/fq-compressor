@@ -125,12 +125,61 @@ E 的 A/B 同窗口平台为据。
 
 A -> B -> C -> D（已完成，同步底座与多级流水线）-> E -> F -> I -> G -> H（已完成）。
 
-课程收束后不再顺延新的流水线阶段。后续只做关账与真实语料验收，见 `docs/real-corpus.md`；新的并发课题另起一章，不伪装成阶段 J。
+课程收束后不再顺延新的流水线阶段。后续只做关账与真实语料验收，见 `docs/real-corpus.md`；新的并发课题另起一章，不伪装成阶段 J。2026-11 起另开“压缩比专项”，它不属于并发课程，也不占 A–H 进度表。
 
 - E 是 F/G/H/I 的验证底座（WSL2 波动下无测量即盲调），必须最先。
 - F 验证成本最低（归档逐字节一致门禁）、直击已确认瓶颈；I 依赖 F 落定后的 zstd 调用点。
 - G 低风险稳赢（解压侧当前零重叠），产出的泛型 stage 供 H 可选复用；H 最难放最后。
 - 弹性条款：若 E 数据显示 reader 占压缩路径 >60%，允许 H 提前到 G 之前——排序决策交给 E 的数据（呼应"先 profiling"教训）。
+
+## 压缩比专项（2026-11 起，独立于并发课程）
+
+状态：**Phase 0 探针与数据集 manifest、Phase 1 质量 codec 探针、Phase 1 实验容器
+`fqc-max/v1`、Phase 2 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID front coding
+已完成；Phase 2 只做了 PAF + external reference 的合成机制验证，真实 30× WGS 未验收；
+Phase 3 未实现**。默认 CLI、
+`fqc-sequential/v2` 格式与 fast 路径不变；`max-compress` / `fqc_ref_archive` 是显式
+实验入口，不是最终 max-ratio。完整设计、证据矩阵与本地实验见 [docs/max-ratio-design.md](max-ratio-design.md)，
+决策见 [ADR-0003](decisions/0003-max-ratio-mode.md)，Phase 0 提案见
+[openspec/changes/2026-11-14-max-ratio-phase0-benchmark](../openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md)，
+数据集见 [datasets.md](max-ratio-baselines/datasets.md)，质量 codec 实验见
+[2026-11-15-quality-codecs.md](max-ratio-baselines/2026-11-15-quality-codecs.md)，实验容器
+实测见 [2026-11-15-max-container.md](max-ratio-baselines/2026-11-15-max-container.md)，
+参考原型实测见 [2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)，
+ID codec 实测见 [2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-codec.md)，
+格式契约见
+[openspec/changes/2026-11-15-max-ratio-phase1-container](../openspec/changes/2026-11-15-max-ratio-phase1-container/design.md)
+与 [openspec/changes/2026-11-15-max-ratio-phase2-ref](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)
+以及 [ID codec change](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)，
+探针说明见 [tools/ratio_probe/README.md](../tools/ratio_probe/README.md)、
+[tools/quality_probe/README.md](../tools/quality_probe/README.md) 与
+[tools/ref_archive/README.md](../tools/ref_archive/README.md)。
+
+这个专项不是阶段 J：它不练新的同步原语，也不改现有流水线；目标是回答“先不考虑速度，
+最高压缩比应该换什么算法结构”。两条 profile：
+
+- `max-ref`：参考/BAM sidecar → 位置/方向/差异 + 质量上下文；对齐 ORA/Genozip。
+- `max-ref-free`：minimizer/伪基因组 → 原序引用 + 差异 + 质量上下文；对齐 SPRING/PgRC2/Mstcom。
+
+| 阶段 | 内容 | 状态 | 压缩比验收/实测 |
+|---|---|---|---|
+| Phase 0 | ratio-only benchmark、数据集 SHA、流级统计 | 完成测量面：probe+HiSeq/NovaSeq/WGS 头部快照+WGS 完整 run manifest；完整 run 未下载 | 重复运行字节数稳定；口径可追溯 |
+| Phase 1 | 质量/ID/`+` 行/换行共享底座 | 质量 codec 探针与实验容器 `fqc-max/v1` 完成；`+` 行/CRLF/空 read 逐字节保真未实现 | 质量流 ≥10% 已通过（HiSeq −17.7%、NovaSeq −22.9%、WGS 头部 −23.2% vs zstd19）；实际容器相对 v2 −21.36%～−24.87%，5.087×–8.165× raw |
+| Phase 2 | `max-ref` 参考/BAM sidecar（绝对压缩比优先） | PAF + external reference 原型完成；合成 5 Mb/3× 数据 21.05× raw；自适应 ID front coding 完成，真实 WGS/NovaSeq 头部 ID 探针约 −99%；结构化 ID 合成 53.385× raw（机制验证）；BAM/内置 mapper/真实 30× WGS 未完成 | 30× 人类 WGS ≥20× raw、≥5× gzip |
+| Phase 3 | `max-ref-free` 伪基因组/原序引用（无参路线） | 未开始 | 全质量短读 ≥10× raw；分箱 NovaSeq ≥18–20× raw |
+| Phase 4 | 速度/内存优化 | 未开始 | 仅在 Phase 1–3 达标后启动 |
+
+纪律：
+
+- 先压缩比，后速度；Phase 0–3 不设吞吐门禁。
+- 绝对压缩比优先：Phase 2 先做有参 `max-ref`，Phase 3 再做无参 `max-ref-free`；不因实现
+  方便而颠倒目标顺序。
+- 实现前必须过 `openspec/changes/` 格式契约与 ADR 复审；Phase 1/2 实验格式均为追溯
+  补契约，只冻结实验格式，正式对外格式仍需复审。
+- 全局 contig/参考索引/permutation 必须有显式内存预算与 spill；不把全局状态塞进现有帧流水线。
+- 质量值优先复用 htscodecs fqzcomp（策略 0/1 每块自适应，zstd 回退）；本地 HiSeq/NovaSeq
+  样本均验证优于 zstd19。不自研 range coder，不混入有损质量档。
+- 停止条件见 `docs/max-ratio-design.md#13-经验反模式与停止条件`；达不到就缩范围，不堆沉没成本。
 
 ## 不推荐
 
@@ -138,10 +187,10 @@ A -> B -> C -> D（已完成，同步底座与多级流水线）-> E -> F -> I -
 - **lock-free MPSC（复杂 CAS）**：练手阶段 mutex 版足够，无锁是另一课题。
 - **异步 I/O（io_uring/aio）**：引入平台复杂度，偏离并发流水线主题。
 - **过早泛型 pipeline 框架**：预先造必返工。
-- **自研熵编码器（算术编码/range coder/手写 FSE）**：复杂度与验证成本超练手预算，熵编码交给 zstd（v1 SCM 已删，见 `docs/fastq-compression-survey.md` §7）。
-- **read 重排序 / 全局相似聚类（SPRING 路线）**：v1 坟场——重排序/编码器状态/内存核算耦合错位，内存上限无法强制执行（v1 复盘根因）。
-- **跨帧 zstd 字典**：破坏帧独立性——帧独立是阶段 D 并行编码的切分点（ARCHITECTURE.md#执行架构）。
-- **有参压缩（参考基因组）**：项目定位外。
+- **fast 路径自研熵编码器（算术编码/range coder/手写 FSE）**：复杂度与验证成本超练手预算，fast 路径的熵编码交给 zstd（v1 SCM 已删，见 `docs/fastq-compression-survey.md` §7）。max-ratio 专项优先复用 htscodecs，不重写编码器。
+- **fast 路径 read 重排序 / 全局相似聚类（SPRING 路线）**：v1 坟场——重排序/编码器状态/内存核算耦合错位，内存上限无法强制执行（v1 复盘根因）。max-ratio 的 `max-ref-free` 允许重新评估，但必须独立引擎、显式内存预算与 spill。
+- **跨帧 zstd 字典**：破坏帧独立性——帧独立是阶段 D 并行编码的切分点（ARCHITECTURE.md#执行架构）；max-ratio 也不以“跨帧字典”作为默认方案。
+- **fast 路径有参压缩（参考基因组）**：fast 路径不做；max-ratio 的 `max-ref` 是显式 opt-in，外部参考与嵌入参考的体积口径必须分开报告。
 - **gz 输入的 inflate/parse 分离并行**：除非阶段 E 数据证明 gz 路径 parse 占比超 inflate，否则不做（反投机）。
 
 ## 进度
@@ -157,3 +206,8 @@ A -> B -> C -> D（已完成，同步底座与多级流水线）-> E -> F -> I -
 | I（番外） | 完成 | 87562df |
 | G | 完成 | 6fae4a5 |
 | H | 完成 | a50c0ce |
+
+压缩比专项不计入上表；状态见 [docs/max-ratio-design.md](max-ratio-design.md)。当前
+`fqc_ratio_probe`、`fqc_quality_probe` 与 `fqc_ref_archive` 是开发工具；`max-compress`
+是实验 CLI；`--max-ratio` 顶层开关、内置 mapper/BAM、Phase 3 伪基因组与最终格式仍未实现，
+Phase 2 真实 30× WGS 尚未验收。

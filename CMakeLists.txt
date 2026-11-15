@@ -19,7 +19,7 @@ endif()
 set(FQC_VERSION_CORE "${CMAKE_MATCH_1}")
 
 project(FQCompressor
-    LANGUAGES CXX
+    LANGUAGES C CXX
     VERSION ${FQC_VERSION_CORE}
     DESCRIPTION "High-performance FASTQ compressor"
     HOMEPAGE_URL "https://github.com/open-genomics/fq-compressor"
@@ -175,6 +175,7 @@ find_package(zstd CONFIG REQUIRED)
 
 # Checksum library
 find_package(xxHash CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 message(STATUS "Found xxHash: ${xxHash_VERSION}")
 
 # Handle fmt header-only vs compiled library
@@ -195,6 +196,9 @@ set(FQC_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 # Source files (libraries and main executable)
 add_subdirectory(src)
+
+# Development-only measurement tools (not installed)
+add_subdirectory(tools)
 
 # =============================================================================
 # Testing Configuration

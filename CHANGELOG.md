@@ -2,6 +2,75 @@
 
 ## [未发布]
 
+### 新增
+
+- **Phase 1 实验容器 `fqc-max/v1`（ratio-first 原型）**：新增独立 magic/全局头/块头/
+  footer，以及 `max-compress`/`max-decompress`/`max-verify`（别名 `mc`/`mx`/`mv`）。
+  ID 与 2-bit packed sequence 复用 v2 逻辑流，外层 zstd19；质量流按块在 htscodecs
+  `v1.6.7` fqzcomp（策略 0/1 自适应）与 zstd19 之间取较小者；块级/全局 XXH64、临时
+  文件 rename、截断/损坏/未知 magic 的 fail-closed 检查。真实数据：HiSeq 25k
+  1,285,285 B（相对 v2 −21.36%，5.087× raw）；NovaSeq RNA-Seq 头部 12,280,644 B
+  （−24.87%，8.165× raw）；WGS 头部 12,828,169 B（−23.69%，7.790× raw）；三个归档
+  `max-verify` 与解压后 `cmp` 均通过。**边界**：只对 canonical LF FASTQ 逐字节还原；
+  `+` 行内容/CRLF/空 read 未保真；`--max-ratio` 顶层开关、正式参考模式/伪基因组
+  未实现；默认 CLI 与 `fqc-sequential/v2` 不变。→ 详见
+  `docs/max-ratio-baselines/2026-11-15-max-container.md`、
+  `openspec/changes/2026-11-15-max-ratio-phase1-container/design.md`、
+  `.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase1-container.md`
+
+- **Phase 2 参考压缩原型 `fqc-max-ref/v1`（开发工具）**：新增 `tools/ref_archive` /
+  `fqc_ref_archive`，支持 FASTQ + external reference FASTA + PAF sidecar →
+  `fqc-max-ref/v1`，以及 `decompress`/`verify`。mapped read 存 contig id、target
+  offset、方向、mismatch delta/alt；未映射/非纯 `<len>M` read 回退 literal；quality
+  每块在 fqzcomp（策略 0/1）与 zstd19 间取较小者；ID 在 Phase 2.1 后自适应
+  raw/front，alignment 流 zstd19；块级 XXH64 + footer 滚动全局校验和；参考 contig
+  表/摘要不匹配 fail closed；输出路径别名输入/参考拒绝。合成 5 Mb 随机参考 +
+  wgsim 3× 双端 150 bp：R1 17,423,235 B →
+  827,688 B（21.050× raw，mapped 49,194/literal 806），R2 → 827,546 B
+  （21.054× raw，mapped 49,211/literal 789）；`verify` 与解压 `cmp` 通过，重复压缩
+  SHA 一致。**边界**：参考不计入归档；质量恒定 Q23；PAF 只接受全长纯 M；无内置
+  mapper/BAM、clip/indel、参考嵌入、SHA-256、paired-end 联合或真实 30× WGS 验收；
+  canonical LF 之外不保真。→ 详见
+  `docs/max-ratio-baselines/2026-11-15-ref-container.md`、
+  `openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md`、
+  `.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md`
+
+- **Phase 2.1 自适应 ID front coding（`fqc-max-ref/v1` 扩展）**：block header 的
+  `idCodec=2` 表示 front-coded ID 逻辑流，编码端每块同时尝试 raw 与 front-coded 的
+  zstd19，取较小者；尾部 4 字节保存 front payload 未压缩长度，raw 时写 0 以保持旧归档
+  逐字节兼容；block checksum 仍覆盖解码后的 raw ID 流。真实 WGS/NovaSeq 头部 ID 探针
+  从 114,099/111,762 B 降到 1,085/1,105 B（约 −99%），随机 wgsim ID 自动回退 raw；
+  人工结构化 ID 合成 R1 17,700,000 B → 331,553 B（53.385× raw，`front_id_blocks=2`），
+  `verify` 与 `cmp` 通过。**边界**：53.385× 是合成机制验证，不是真实 30× WGS；参考
+  不计入、质量恒定 Q23、无数字 token/delta 或 paired-end 联合。→ 详见
+  `docs/max-ratio-baselines/2026-11-15-id-codec.md`、
+  `openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md`、
+  `.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md`
+
+- **vendored htscodecs fqzcomp 最小子集**：固定 `v1.6.7` tag/peeled commit/tarball
+  SHA-256 与 BSD-3-Clause 许可证，仅包含 `fqzcomp_qual`、`utils` 及相关头；构建为私有
+  静态库 `fqc_fqzcomp`，不安装、不暴露 C API。根 CMake 启用 C 语言与 `Threads`；
+  Conan `exports_sources` 增加 `third_party/*`，避免打包漏掉 vendored 源码。→ 详见
+  `third_party/htscodecs/README.md`
+
+- **Phase 0 压缩比探针（开发工具）**：新增 `tools/ratio_probe` / `fqc_ratio_probe`，独立于
+  生产 `FastqParser`，保留 `+` 行、CRLF/LF、空 read 与无最终换行，按
+  `header/sequence/plus/quality/blank` 统计原始字节、质量分布、packed sequence 和
+  gzip/zstd 基线；输出 `fqc-ratio-probe/v1` JSON。目标不安装、不进入主 CLI，不改变
+  `fqc-sequential/v2` 或默认命令。新增 10 项 `ratio_probe_test`，覆盖空 read、CRLF、gzip
+  输入、畸形输入和基线确定性。→ 详见 `tools/ratio_probe/README.md`、
+  `docs/max-ratio-baselines/2026-11-15-hiseq.md`
+
+- **Phase 1 质量 codec 探针（开发工具）**：新增 `tools/quality_probe` /
+  `fqc_quality_probe`，用 htscodecs `v1.6.7` fqzcomp 与 zstd 对照 quality 流，输出
+  `fqc-quality-probe/v1`，支持按块、策略 0–3、自适应 0/1 与 round-trip 校验。真实数据：
+  HiSeq 全质量 558,189 B vs zstd19 678,308 B（−17.7%）；NovaSeq RNA-Seq 分箱
+  质量头部 2,159,788 B vs 2,802,326 B（−22.9%）；WGS 分箱质量头部 2,168,649 B vs
+  2,823,235 B（−23.2%）。按当前 FQC 归档估算，质量流替换可带来 15.5%–16.6% 总缩减
+  （未计入新容器开销；容器实测见上一条 `fqc-max/v1`）。目标不安装、不进入主 CLI，不改变
+  `fqc-sequential/v2` 或默认命令。→ 详见 `tools/quality_probe/README.md`、
+  `docs/max-ratio-baselines/2026-11-15-quality-codecs.md`
+
 ### 改进
 
 - 并行解析的 parser 扇出与 encoder 池解耦：encoder 数量采用 `min(K, 4)`，避免提高
@@ -57,7 +126,27 @@
 - **文档引用去行号化**：`docs/fastq-compression-survey.md` 与 `docs/roadmap.md` 中的
   `文件:行号` 引用全部改为 `文件#节标题`（引代码改指符号名），被引文档增删行不再导致
   引用漂移；约定记入 AGENTS.md「注释与文档语言」。
-
+- **max-ratio 数据集 manifest**：新增 `docs/max-ratio-baselines/datasets.md` 与
+  `datasets.json`，固定 HiSeq 25k 全质量样本、NovaSeq `DRR174812` R1 头部 21,110,784 B
+  子集（303,610 reads，RNA-Seq 分箱质量）和深覆盖 WGS `SRR14724532` 头部 21,110,784 B
+  子集（298,974 reads，WGS 分箱质量）/完整 35× run manifest 的 accession、ENA MD5、
+  本地 SHA/字节数与口径边界；WGS 完整 run 未下载。
+- **压缩比专项调研与最高压缩比方案**：新增 `docs/max-ratio-design.md`、ADR-0003、提案笔记
+  与 `openspec/changes/2026-11-14-max-ratio-phase0-benchmark/`。记录 2025–2026 年
+  ORA/Genozip/SPRING/PgRC2/Mstcom/FQSqueezer/fqxv/FastqCA 等方案的压缩比、代价与可比性
+  边界；补充真实 HiSeq 小样本的流级实验、合成数据反例、许可证边界与结论→来源矩阵。
+  明确实现顺序为 Phase 0 测量底座 → Phase 1 质量/ID/metadata → Phase 2 有参
+  `max-ref`（绝对压缩比优先）→ Phase 3 无参 `max-ref-free` → Phase 4 速度/内存。
+  当前 `fqc-sequential/v2` fast 模式与默认 CLI 行为不变；Phase 0 探针/数据集 manifest、
+  Phase 1 质量 codec 探针/实验容器 `fqc-max/v1`、Phase 2 PAF 参考原型
+  `fqc-max-ref/v1` 已实现；Phase 3 与最终格式未实现，Phase 2 真实 30× WGS 未验收。
+  → 详见 `docs/max-ratio-design.md`、`docs/decisions/0003-max-ratio-mode.md`、
+  `docs/max-ratio-baselines/2026-11-15-quality-codecs.md`、
+  `docs/max-ratio-baselines/2026-11-15-max-container.md`、
+  `docs/max-ratio-baselines/2026-11-15-ref-container.md`、
+  `openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md`、
+  `openspec/changes/2026-11-15-max-ratio-phase1-container/proposal.md`、
+  `openspec/changes/2026-11-15-max-ratio-phase2-ref/proposal.md`
 
 ## [0.1.0] - 2026-08-21
 

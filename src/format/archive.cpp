@@ -370,9 +370,9 @@ void appendPackedSequence(Bytes& output, std::string_view sequence) {
     return output;
 }
 
-[[nodiscard]] auto logicalChecksum(std::span<const std::uint8_t> ids,
-                                   std::span<const std::uint8_t> sequences,
-                                   std::span<const std::uint8_t> qualities) -> std::uint64_t {
+[[nodiscard]] auto logicalChecksumImpl(std::span<const std::uint8_t> ids,
+                                       std::span<const std::uint8_t> sequences,
+                                       std::span<const std::uint8_t> qualities) -> std::uint64_t {
     auto checksum = XXH64(ids.data(), ids.size(), 0);
     checksum = XXH64(sequences.data(), sequences.size(), checksum);
     return XXH64(qualities.data(), qualities.size(), checksum);
@@ -647,7 +647,7 @@ auto encodeFrame(std::span<const ReadRecord> records,
     frame->rawQualities = std::move(raw.qualities);
     frame->recordCount = *recordCount;
     frame->totalBases = raw.totalBases;
-    frame->checksum = logicalChecksum(frame->rawIds, frame->rawSequences, frame->rawQualities);
+    frame->checksum = logicalChecksumImpl(frame->rawIds, frame->rawSequences, frame->rawQualities);
     return frame;
 }
 
@@ -700,6 +700,19 @@ auto advanceGlobalChecksum(std::uint64_t current, std::uint64_t frameChecksum) -
     return advanceGlobalChecksumImpl(current, frameChecksum);
 }
 
+auto logicalChecksum(std::span<const std::uint8_t> ids,
+                     std::span<const std::uint8_t> sequences,
+                     std::span<const std::uint8_t> qualities) -> std::uint64_t {
+    return logicalChecksumImpl(ids, sequences, qualities);
+}
+
+auto decodeLogicalStreams(std::span<const std::uint8_t> ids,
+                          std::span<const std::uint8_t> sequences,
+                          std::span<const std::uint8_t> qualities,
+                          std::uint32_t expectedCount) -> Result<std::vector<ReadRecord>> {
+    return decodeRawStreams(ids, sequences, qualities, expectedCount);
+}
+
 auto decodeRawFrame(const RawFrame& frame) -> Result<DecodedFrame> {
     auto ids = decompress(frame.ids, frame.rawIdsSize);
     if (!ids) {
@@ -713,7 +726,7 @@ auto decodeRawFrame(const RawFrame& frame) -> Result<DecodedFrame> {
     if (!qualities) {
         return makeError<DecodedFrame>(qualities.error());
     }
-    const auto checksum = logicalChecksum(*ids, *sequences, *qualities);
+    const auto checksum = logicalChecksumImpl(*ids, *sequences, *qualities);
     if (checksum != frame.checksum) {
         return makeError<DecodedFrame>(ErrorCode::kChecksumError, "FQC v2 frame checksum mismatch");
     }

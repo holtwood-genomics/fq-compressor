@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" font-family="Microsoft YaHei, PingFang SC, SimHei, sans-serif">
+  <defs>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#2563eb"/></marker>
+    <marker id="arrow-orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#ea580c"/></marker>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#9ca3af"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1200" height="470" fill="#ffffff"/>
+  <text x="32" y="42" font-size="18" font-weight="bold" fill="#111827">fq-compressor 解压 / 校验流水线（fqc-sequential/v2）</text>
+  <text x="32" y="64" font-size="12" fill="#6b7280">decompress 与 verify 复用同一条流水线：decoder 并行解码，writer 有序提交，仅 sink 不同</text>
+  <rect x="790" y="22" width="380" height="52" rx="8" fill="#f9fafb" stroke="#e5e7eb"/>
+  <line x1="804" y1="40" x2="854" y2="40" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <text x="864" y="44" font-size="12" fill="#111827">帧数据流（有界 MPMC 队列）</text>
+  <line x1="804" y1="62" x2="854" y2="62" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="864" y="66" font-size="12" fill="#111827">in-flight credit（源端取得 / 有序端归还）</text>
+  <rect x="30" y="130" width="190" height="100" rx="10" fill="#eff6ff" stroke="#2563eb" stroke-width="1.5"/>
+  <text x="125.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">ArchiveReader</text>
+  <text x="125.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">readRawFrame：帧头 + 载荷</text>
+  <text x="125.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">内存预检（逐字段 + 总量）</text>
+  <text x="125.0" y="206" text-anchor="middle" font-size="11" fill="#6b7280">帧 id 单调递增</text>
+  <rect x="270" y="152" width="90" height="56" rx="28.0" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="315.0" y="176" text-anchor="middle" font-size="13" font-weight="bold" fill="#111827">MPMC q1</text>
+  <text x="315.0" y="193" text-anchor="middle" font-size="10" fill="#2563eb">RawFrame</text>
+  <rect x="410" y="130" width="190" height="100" rx="10" fill="#ecfdf5" stroke="#059669" stroke-width="1.5"/>
+  <text x="505.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">decoder × N</text>
+  <text x="505.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">zstd 解压（CPU 密集）</text>
+  <text x="505.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">逻辑流校验和 + 记录解码</text>
+  <text x="505.0" y="206" text-anchor="middle" font-size="11" fill="#6b7280">乱序完成</text>
+  <rect x="650" y="152" width="90" height="56" rx="28.0" fill="#dbeafe" stroke="#2563eb" stroke-width="2"/>
+  <text x="695.0" y="176" text-anchor="middle" font-size="13" font-weight="bold" fill="#111827">MPMC q2</text>
+  <text x="695.0" y="193" text-anchor="middle" font-size="10" fill="#2563eb">DecodedFrame</text>
+  <rect x="790" y="130" width="210" height="100" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="895.0" y="152" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">writer（reorder + sink）</text>
+  <text x="895.0" y="172" text-anchor="middle" font-size="11" fill="#6b7280">reorder buffer 按帧 id 保序</text>
+  <text x="895.0" y="189" text-anchor="middle" font-size="11" fill="#6b7280">滚动全局校验和（顺序依赖）</text>
+  <text x="895.0" y="206" text-anchor="middle" font-size="11" fill="#6b7280">提交后归还 credit</text>
+  <line x1="220" y1="180" x2="268" y2="180" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="360" y1="180" x2="408" y2="180" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="600" y1="180" x2="648" y2="180" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="740" y1="180" x2="788" y2="180" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <rect x="1060" y="100" width="112" height="64" rx="10" fill="#f9fafb" stroke="#9ca3af" stroke-width="1.5"/>
+  <text x="1116.0" y="122" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">FASTQ 输出</text>
+  <text x="1116.0" y="142" text-anchor="middle" font-size="11" fill="#6b7280">(decompress)</text>
+  <rect x="1060" y="210" width="112" height="64" rx="10" fill="#f9fafb" stroke="#9ca3af" stroke-width="1.5"/>
+  <text x="1116.0" y="232" text-anchor="middle" font-size="14" font-weight="bold" fill="#111827">仅计数</text>
+  <text x="1116.0" y="252" text-anchor="middle" font-size="11" fill="#6b7280">(verify · RecordSink)</text>
+  <line x1="1000" y1="158" x2="1056" y2="136" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <line x1="1000" y1="202" x2="1056" y2="238" stroke="#2563eb" stroke-width="2.5" marker-end="url(#arrow-blue)"/>
+  <path d="M 880,230 L 880,380 L 125,380 L 125,234" fill="none" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="5,3" marker-end="url(#arrow-orange)"/>
+  <text x="500" y="374" text-anchor="middle" font-size="11" fill="#ea580c">writer 有序提交后归还 credit</text>
+  <text x="32" y="436" font-size="11" fill="#6b7280">footer 校验（totals + 全局校验和）在流水线 join 后由 writer 侧有序累积值对比，严格性与顺序版一致；截断 / 丢帧 / 重复帧 / 载荷损坏一律 fail closed（详见 ARCHITECTURE.md#故障行为）。</text>
+</svg>

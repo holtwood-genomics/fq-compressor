@@ -1,7 +1,8 @@
 # FASTQ 压缩算法业界调研与 FQC v2 对比
 
-- 用途：弄清业界顶级 FASTQ 压缩器的算法设计，定位 FQC v2 的谱系与差距，为 `docs/roadmap.md` 阶段 E–I 提供取舍依据。
+- 用途：弄清业界顶级 FASTQ 压缩器的算法设计，定位 FQC v2 的谱系与差距，为 `docs/roadmap.md` 阶段 E–I 与 2026-11 最高压缩比专项提供取舍依据。
 - 调研日期：2026-07-27。外部 benchmark 数据随数据集、工具版本、硬件变化，本文数字非本地复测，只表征量级。
+- 2026-11-14 增补：新增最高压缩比专项增补（§9），把 ORA/Genozip/PgRC2/Mstcom/FQSqueezer/fqxv/FastqCA/长读方案的证据与口径单独列出；旧章节的“不推荐重排/自研熵编码/有参”结论限定为 **fast 流式路径**，最高压缩比专项另见 `docs/max-ratio-design.md`。
 - 来源标注约定：**【本地】** 本仓库代码/文档事实（文档引 `文件#节标题`，代码引 `文件`+符号名；不用行号，行号随编辑漂移）；**【文献】** 论文/官方文档；**【外部实测】** 第三方 benchmark（注明数据集）；**【推断】** 作者分析。
 
 ## 1. 问题背景：FASTQ 压缩的特殊性
@@ -38,7 +39,7 @@ FASTQ 每条记录含标识符（ID + 注释）、序列、`+` 分隔行、质�
 
 **为什么有效**：同基因组 read 高度相似，但它们在原始文件中相距遥远，任何滑动窗口压缩器（窗口几十~几百 MB）都看不到这份冗余。重排把相似 read 聚邻后，序列流退化为"少量锚序列 + 大量短差异列表"，跨 read 冗余被显式消除。这是业界压缩比第一梯队（≈91–95% 减少，§5）的核心引擎。
 
-**代价账单**：全局重排 → 非流式（或需两趟）、内存随数据规模增长、实现复杂度高（min-hash + 比对 + 编辑脚本 + 重排映射）。本项目的 v1 坟场正是这条路线：v1 曾实现 ABC（Spring/Mincom 风格）+ ReorderMap，最终因"重排序、编码器状态与内存核算耦合在错误层级，内存上限无法强制执行"整体删除 27,835 行【本地 docs/postmortems/2026-07-13-legacy-architecture-debt.md#根因/#修复】。
+**代价账单**：全局重排 → 非流式（或需两趟）、内存随数据规模增长、实现复杂度高（min-hash + 比对 + 编辑脚本 + 重排映射）。本项目的 v1 坟场正是这条路线：v1 曾实现 ABC（Spring/Mincom 风格）+ ReorderMap，最终因"重排序、编码器状态与内存核算耦合在错误层级，内存上限无法强制执行"整体删除 27,835 行【本地 docs/postmortems/2026-07-13-legacy-architecture-debt.md#根因/#修复】。另注意：SPRING 的"lossless"应按字段级理解，非 ACGTN IUPAC、`+` 行 metadata 与原始顺序的保留在独立研究中有争议【外部实测/推断】；不能直接称为逐字节无损。
 
 ### 3.2 fqzcomp（2013，质量值上下文建模派）【文献】
 
@@ -46,7 +47,7 @@ FASTQ 每条记录含标识符（ID + 注释）、序列、`+` 分隔行、质�
 
 **为什么有效**：质量值沿 read 位置和前序质量强相关（测序化学的连续性），order-N 建模把码长压到接近**条件熵**而非零阶熵——这是通用压缩器（零阶/字典模型）结构上吃不到的部分。
 
-**代价账单**：每个 worker 一张稠密上下文表（内存 × worker 数）、每个符号一次全字母表累积更新（CPU 密集）。本项目 v1 的 SCM（Quality Order-2）付过同款账单："为每个 worker 分配一张稠密上下文表，并对每个符号执行全字母表累积更新"【本地 docs/postmortems/2026-07-13-legacy-architecture-debt.md#症状】。另一个结构性软肋：对已经分箱的质量值（如 NovaSeq 的 2-bit 质量档）无肉可吃——外部实测中 fqzcomp 在 NovaSeq WGS 数据上反输 gzip 默认档（§5 脚注 1）。
+**代价账单**：每个 worker 一张稠密上下文表（内存 × worker 数）、每个符号一次全字母表累积更新（CPU 密集）。本项目 v1 的 SCM（Quality Order-2）付过同款账单："为每个 worker 分配一张稠密上下文表，并对每个符号执行全字母表累积更新"【本地 docs/postmortems/2026-07-13-legacy-architecture-debt.md#症状】。旧的外部实测中，fqzcomp5 在 NovaSeq WGS 的**整文件**比输给 gzip 默认档（§5 脚注 1）；但那是旧版本、整文件口径，不能直接推出“分箱质量没有上下文收益”。2026-11-15 本地 htscodecs `v1.6.7` 的 quality-only 实验在 NovaSeq RNA-Seq 分箱质量头部上仍比 zstd19 小 22.9%（§9.5），说明“分箱 = 无肉可吃”不是普遍结论，完整 WGS run 仍需复核。
 
 ### 3.3 MFCompress（2014，轻量 Markov 派）【文献】
 
@@ -126,17 +127,17 @@ FQC v2 的设计最近邻是 **DSRC 象限**：分字段列式 + 通用熵编码
 ### 6.2 差距三来源（按贡献排序）
 
 **① 质量值零变换（主差距）【本地+外部实测】**
-质量流占原始数据约 40%，且占 FQC 压缩后体积的 **67–83%**（ALGORITHM.md#端到端压缩比分析 端到端表：366 B → ~120 B 中质量值占 80–100 B）。业界压缩比第一梯队的主引擎正是质量值的 order-N 上下文建模 + 算术编码（§3.2/3.3）。正论证：FQC 把最大的一块原样交给 zstd level 1；反论证：fqzcomp 在 NovaSeq 分箱数据上反输 gzip（§5 脚注 4）证明质量值的可压空间 = 其分布熵，只有上下文建模吃得到，字典编码器（zstd）只能吃到表层重复。
+质量流占原始数据约 40%；在 `ALGORITHM.md#端到端压缩比分析` 的 150 bp 合成示例中，它占 FQC 压缩后体积的 **67–83%**（366 B → ~120 B 中质量值占 80–100 B），但本地真实 HiSeq 25k 样本中占归档约 **50.7%**。业界压缩比第一梯队的主引擎正是质量值的 order-N 上下文建模 + 算术编码（§3.2/3.3）。正论证：FQC 把最大的一块原样交给 zstd level 1；反论证：fqzcomp 在 NovaSeq 分箱数据上反输 gzip（§5 脚注 4）证明质量值的可压空间 = 其分布熵，只有上下文建模吃得到，字典编码器（zstd）只能吃到表层重复。
 
-**② 熵编码档位（小差距）【本地】**
-zstd level 1 偏吞吐；level 1→3 仅补 2–5%（ALGORITHM.md#为什么选 Zstd level 1）。即便拉满档位，也补不齐 LZ77+Huffman 与 range coder 在字节级熵上的结构差距。
+**② 熵编码档位（fast 模式内的小差距）【本地】**
+zstd level 1 偏吞吐；level 1→3 仅补 2–5%（ALGORITHM.md#为什么选 Zstd level 1）。即便拉满档位，也补不齐 LZ77+Huffman 与 range coder 在字节级熵上的结构差距。这是 fast 模式的结论；max-ratio 专项不靠调档位，而是把质量上下文编码作为独立 codec 重新评估（`docs/max-ratio-design.md`）。
 
-**③ 无 read 重排序（对真实数据是大头，对合成数据无影响）【文献+本地复盘】**
-SPRING 的 min-hash 聚类对真实生物数据（重复/低复杂度/同基因组 read 相似）收益巨大，这是 91–95% 减少的核心来源（§3.1）；对随机合成数据收益趋近于零。但这条路是 v1 已经付过一次的学费：重排序/编码器状态/内存核算耦合错位导致内存上限无法强制执行，27,835 行整体删除（docs/postmortems/2026-07-13-legacy-architecture-debt.md#根因/#修复）。
+**③ 无 read 重排序（fast 模式不采用；对真实数据是大头，对合成数据无影响）【文献+本地复盘】**
+SPRING 的 min-hash 聚类对真实生物数据（重复/低复杂度/同基因组 read 相似）收益巨大，这是 91–95% 减少的核心来源（§3.1）；对随机合成数据收益趋近于零。但这条路是 v1 已经付过一次的学费：重排序/编码器状态/内存核算耦合错位导致内存上限无法强制执行，27,835 行整体删除（docs/postmortems/2026-07-13-legacy-architecture-debt.md#根因/#修复）。该判断限定于 fast 路径；最高压缩比专项重新评估“全局分析 + 独立引擎 + 内存计划”的可行性，见 `docs/max-ratio-design.md`。
 
 ### 6.3 反向论点：压缩比弱 ≠ 设计失败
 
-FQC 的目标函数是 **吞吐 × 内存有界 × 可校验 × 可回退 × 练手价值**，不是压缩比极值（README.md#高性能架构、ARCHITECTURE.md 首段）。工业界同样用脚投票选吞吐：Petagene 以追平 SPRING 的压缩比 + 约 10 倍速度取胜（WGS 压缩 17 min vs 3h3m，§5）；SPRING 论文级压缩比背后是小时级的运行时间。在"不动质量值编码"的前提下，任何其他改动（序列、ID、熵编码档位）都是小头——这决定了本项目只做 §7 的轻量改进，而非全面开战。
+FQC fast 路径的目标函数是 **吞吐 × 内存有界 × 可校验 × 可回退 × 练手价值**，不是压缩比极值（README.md#高性能架构、ARCHITECTURE.md 首段）。工业界同样用脚投票选吞吐：Petagene 以追平 SPRING 的压缩比 + 约 10 倍速度取胜（WGS 压缩 17 min vs 3h3m，§5）；SPRING 论文级压缩比背后是小时级的运行时间。在 fast 路径“不动质量值编码”的前提下，任何其他改动（序列、ID、熵编码档位）都是小头——这决定了 fast 路径只做 §7 的轻量改进，而非全面开战。最高压缩比另开独立专项，见 `docs/max-ratio-design.md`。
 
 ### 6.4 轻量改进实测（阶段 I：质量流 per-stream zstd level）【本地】
 
@@ -168,9 +169,11 @@ FQC 的目标函数是 **吞吐 × 内存有界 × 可校验 × 可回退 × 练
 
 对本报告的两个修正性注记：
 1. §6.2②"level 1→3 仅补 2–5%"在实测中偏乐观——L3 在两类数据上均未改善（甚至变差）；zstd 档位旋钮对本项目质量流基本无油水，佐证"压缩比差距②熵编码档位"确为小头。
-2. 差距①（质量值上下文建模）的地位再次确认：能让质量流明显瘦身的只有建模派（fqzcomp/MFCompress），而那正是 v1 已删除的路线——在练手定位下，质量流的压缩比天花板就停在 zstd level 1。
+2. 差距①（质量值上下文建模）的地位再次确认：能让质量流明显瘦身的只有建模派（fqzcomp/MFCompress），而那正是 v1 已删除的路线。**在 fast 流式路径内**，质量流的压缩比天花板停在 zstd level 1；最高压缩比专项重新评估上下文编码，见 `docs/max-ratio-design.md`。
 
 ## 7. 可借鉴 vs 应避免
+
+> 本节是 **fast 流式路径** 的取舍，不是对最高压缩比专项的否决。max-ratio 会重新评估重排、伪基因组、参考与上下文编码；边界与证据见 `docs/max-ratio-design.md`。
 
 ### 可借鉴（轻量、不破坏帧独立性）
 
@@ -181,9 +184,9 @@ FQC 的目标函数是 **吞吐 × 内存有界 × 可校验 × 可回退 × 练
 
 ### 应避免（每条呼应 v1 删除历史）
 
-1. **read 重排序 / min-hash 全局聚类（SPRING 路线）**：v1 复盘根因——内存上限无法强制执行；破坏流式与帧独立。
-2. **自研算术编码 / range coder / 手写 FSE（fqzcomp/Quip 路线）**：复杂度与验证成本超练手预算；v1 SCM（Quality Order-2 稠密上下文表 + 全字母表更新）坟场（docs/postmortems/2026-07-13-legacy-architecture-debt.md#症状）。
-3. **有参压缩（CRAM 路线）**：需参考基因组，项目定位外。
+1. **read 重排序 / min-hash 全局聚类（SPRING 路线）**：fast 路径不采用——v1 复盘根因是内存上限无法强制执行，且破坏流式与帧独立。max-ratio 专项若要重排，必须独立引擎、显式内存预算与 spill；见 `docs/max-ratio-design.md`。
+2. **自研算术编码 / range coder / 手写 FSE（fqzcomp/Quip 路线）**：fast 路径不采用——复杂度与验证成本超练手预算；v1 SCM（Quality Order-2 稠密上下文表 + 全字母表更新）是坟场（docs/postmortems/2026-07-13-legacy-architecture-debt.md#症状）。max-ratio 专项优先复用 htscodecs 的 fqzcomp/rANS，不重写熵编码器。
+3. **有参压缩（CRAM 路线）**：fast 路径不做；max-ratio 的 `max-ref` 仅在显式提供参考/BAM sidecar 时启用，外部参考与嵌入参考的体积口径必须分开报告。
 4. **跨帧 zstd 字典**：破坏帧独立性——帧独立是阶段 D 并行编码的切分点（ARCHITECTURE.md#执行架构）；且训练集外收益不稳。
 5. **有损质量值分箱**：无损是硬约束（ALGORITHM.md#质量值编码）。
 
@@ -207,3 +210,121 @@ FQC 的目标函数是 **吞吐 × 内存有界 × 可校验 × 可回退 × 练
 - `docs/postmortems/2026-07-26-stage-d-parallel-encode-no-speedup.md`（阶段 D 瓶颈与 WSL2 波动）
 - `docs/roadmap.md`（阶段 E–H 开发路线，课程已收束）
 - `docs/real-corpus.md`（公开真实 FASTQ 切片上的 round-trip 与质量流门槛复测）
+
+## 9. 2026-11 最高压缩比专项增补
+
+前八节回答的是“FQC 的 fast 流式路径应该借鉴什么”。2026-11 的问题变成“如果先不考虑速度，
+最高压缩比到底在哪里”。本节只做证据汇总与口径校正；完整设计见
+`docs/max-ratio-design.md`。
+
+### 9.1 2025 年独立 benchmark：有参路线领先
+
+Betschart 等在 *Scientific Reports* 2025 的 benchmark 使用 82 个 GIAB 样本、Illumina
+NovaSeq 6000、约 35×、双端 `fastq.gz`，8 线程；Genozip 使用 `--reference hs38DH.ref.genozip`
+和双端 `--pair`。中位数【独立 benchmark】：
+
+| 工具 | 参考 | 归档大小 | 相对 `fastq.gz` | 压缩时间 | 压缩内存 |
+|---|---|---:|---:|---:|---:|
+| Genozip 15.0.62 | 有 | 11.4 GB | **5.99×** | 2151 s | 11.0 GB |
+| DRAGEN ORA 4.3.4 | 有 | 12.1 GB | **5.64×** | 1488 s | 40.0 GB |
+| SPRING 1.1.1 | 无 | 18.0 GB | **3.79×** | 21,663 s | 57.3 GB |
+| repaq 0.3.0 | 无 | 34.4 GB | **1.99×** | 24,101 s | 5.48 GB |
+| 输入 `fastq.gz` | — | 68.3 GB | 1.00× | — | — |
+
+这张表最重要的三条：
+
+1. **5.99×/5.64× 是相对 `fastq.gz`，不是相对原始 FASTQ；而且两者都是有参路线。**
+2. **SPRING 的 3.79× 是无参、重排路线在固定 benchmark 上的结果**，不能拿论文里另一数据集的
+   28× 直接替代。
+3. **Genozip 的外部参考不计入归档体积**；若把参考分发/嵌入成本算进去，口径会变化。
+   官方说明嵌入参考约 +0.23 bytes/reference base，人类 WGS 约 +700 MB。
+
+### 9.2 有参路线：ORA / Genozip 的机制
+
+- **ORA**：超快 mapper → 位置/方向/mismatch/clip → zstd；质量值 range coder + 上下文模型；
+  read name 数字/非数字 token 化，数字 delta，非数字 zstd。官方示例：235 GB raw → 55 GB gz
+  → 11 GB ORA（约 21× raw、5× gz）【厂商自报】。ORA 默认参考 hg38，解压需要同一参考。
+- **Genozip**：参考文件 + 近似匹配 + 专用流编码；官方 FASTQ 示例 31 GB gz → 6.0 GB
+  （24.7× raw、5.1× gz）【厂商自报】。外部参考模式不复制参考数据；嵌入模式增加约
+  0.23 bytes/reference base。`--bamass` 可用 BAM 比对加速，官方自报 CPU 降 40–60%、
+  归档再小 14%（Illumina WGS）/4%（MGI WGS）。
+
+**结论**：只要允许参考，绝对最高压缩比路线就是有参路线；30× 人类短读 WGS 的 20–25× raw、
+5–6× gz 是有厂商与独立 benchmark 支撑的量级。代价是参考、mapper/索引和版本绑定。
+
+### 9.3 无参路线：重排/伪基因组/上下文模型
+
+| 方案 | 机制 | 公开数字/口径 | 关键 caveat |
+|---|---|---|---|
+| SPRING | min-hash 聚类 + 组装式序列 + order-1 质量 | 论文 195 GB → <7 GB（约 28× raw）；2025 benchmark 3.79× gz | 重排、内存大、慢；逐字节无损性有争议 |
+| PgRC2 | 高质量 read 的近似最短公共超串 + 位置/差异 | 论文用 bits/base；主要压 DNA 流 | 不处理质量/header；bpb 不能当完整 FASTQ 比 |
+| Mstcom | Hamming-shifting graph + 最小生成森林 | 相对 SPRING 平均约 22%；相对当时最佳平均约 11% | 内存/时间高，部分数据集不稳定；有保序模式 |
+| FQSqueezer | k-mer/PPM 上下文 + 质量多字母表 | 通常比 PgRC 再小约 10%（论文口径） | 8/4/2/none 质量档有损；慢、内存大 |
+| fqxv | 重排 + contig/差异 + 上下文模型 | NovaSeq 24.0× shuffle / 20.4× max；GAIIx 11.97×/10.48× | 项目自报；shuffle 重编号，max 存 permutation |
+| FastqCA（2026） | 二维空间冗余/细胞自动机 | lossy 13.46–18.48×；lossless 最高约 11.05× | lossy 用 Q4 质量；不能混入无损 |
+
+**结论**：无参第一梯队不是“更强的 zstd”，而是“全局相似性 + 专用质量编码”。
+其中 PgRC2 只压 DNA 流，Mstcom 有保序模式但内存重，fqxv 的 shuffle 会重编号；
+没有任何一个工具能在所有数据上同时赢压缩比、保序、逐字节无损和低内存。
+
+许可证也要分开看：PgRC/PgRC2、Mstcom、CoLoRd 是 GPL-3.0；FQSqueezer 的公开仓库许可证
+不清晰；SPRING 的发布条款含 research-use 限制；fqxv 是 MIT/Apache-2.0；NanoSpring 是 MIT。
+这些实现只能作为算法参考，除非单独做许可审查；不能直接把代码并入 MIT 的 FQC。
+
+### 9.4 长读：不要把有损数字混进来
+
+- **CoLoRd**：overlap graph + anchor + 差异脚本；HiFi HG002 30× 219 GB → 10 GB（约 22×），
+  但质量流可用有损量化【论文自报】。
+- **NanoSpring**：近似组装/consensus，只压序列，不压 ID/质量；近期高质量 Nanopore 数据
+  0.35–0.65 bits/base，相对 gzip 约 3–6×【论文自报】。
+- **FastqCA lossy**：Q4 质量量化，13–18× 的数字不能作为无损结论。
+
+长读的 20×+ 往往依赖质量有损或只算序列；与完整 FASTQ 无损归档比是不同问题。
+
+### 9.5 对 FQC 的直接含义
+
+1. **fast 模式仍然有效**：它的目标函数是流式、内存有界、快速可校验，不是压缩比极值。
+2. **最高压缩比要另开轨道**：绝对压缩比优先，Phase 2 先做 `max-ref` 对齐 ORA/Genozip；
+   Phase 3 再做 `max-ref-free` 对齐 SPRING/PgRC2/Mstcom/fqxv。
+3. **质量值是共享的第一杠杆，且已有本地证据**：当前本地 HiSeq 归档中质量流约 51%；
+   htscodecs `v1.6.7` fqzcomp 在 HiSeq 全质量上比 zstd19 小 17.7%，在 NovaSeq RNA-Seq 分箱
+   质量头部上小 22.9%，在 WGS 分箱质量头部上小 23.2%（quality-only；[实验](max-ratio-baselines/2026-11-15-quality-codecs.md)）。
+   因此质量上下文编码应作为 Phase 1，不论最终走有参还是无参；完整 WGS run 仍需复核。
+   该结论已落成 `fqc-max/v1` 实验容器：HiSeq/NovaSeq 头部/WGS 头部为 5.087×/8.165×/
+   7.790× raw，相对当前 v2 归档 −21.36%～−24.87%，`max-verify` 与 `cmp` 通过；但容器
+   仍只覆盖 canonical LF，且未处理序列跨 read 冗余。
+4. **序列跨 read 冗余是第二杠杆**：当前 2-bit 已接近下限，只有参考/伪基因组/重排能再降。
+   Phase 2 已把参考路线落成开发原型 `fqc_ref_archive`：PAF + external reference +
+   contig/offset/orientation/mismatch；合成 5 Mb 参考/3× 双端数据 R1/R2 约 21.05× raw，
+   `verify`/`cmp` 通过。但参考不计入、质量恒定、只接受纯 `<len>M`，不是人类 30× WGS 结论。
+   Phase 2.1 又验证了 ID front coding：真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机
+   wgsim ID 自动回退 raw；人工结构化 ID 合成 R1 为 331,553 B（53.385× raw），仍是
+   合成机制验证。
+5. **速度后置**：本节的 20×+ 工具大多比 fast 模式慢一个数量级以上；先追压缩比，再谈速度。
+
+### 9.6 增补来源
+
+- Betschart et al., *Sci Rep* 15, 15358 (2025), DOI 10.1038/s41598-025-00491-8。
+- Illumina ORA 技术页与格式说明（序列 0.3–0.5 bits/nt、质量 range coder、ID token 化、
+  235 GB → 55 GB gz → 11 GB ORA）。
+- Genozip FASTQ / Reference 页面（31 GB gz → 6.0 GB、外部参考 vs 嵌入参考 +0.23 bytes/base）。
+- PgRC2, *Bioinformatics* 41(3), btaf101 (2025)。
+- Mstcom, *PLoS Comput Biol* 17(7), e1009229 (2021)。
+- FQSqueezer, *Bioinformatics* 36(7), 2082 (2020)。
+- fqxv `docs/benchmarks.md` 与公开 issue 的 benchmark 记录。
+- FastqCA, *Front Genet* 17, 1827471 (2026)。
+- CoLoRd, *Nat Methods* 19, 441–444 (2022)；NanoSpring, *Sci Rep* 13, 1999 (2023)。
+- Phase 0 测量底座提案：
+  [openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md](../openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md)。
+- 本地质量 codec 实验与数据集：
+  [docs/max-ratio-baselines/2026-11-15-quality-codecs.md](max-ratio-baselines/2026-11-15-quality-codecs.md)、
+  [docs/max-ratio-baselines/datasets.md](max-ratio-baselines/datasets.md)。
+- Phase 1 实验容器：
+  [docs/max-ratio-baselines/2026-11-15-max-container.md](max-ratio-baselines/2026-11-15-max-container.md)、
+  [openspec/changes/2026-11-15-max-ratio-phase1-container/design.md](../openspec/changes/2026-11-15-max-ratio-phase1-container/design.md)。
+- Phase 2 参考原型：
+  [docs/max-ratio-baselines/2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)、
+  [openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)。
+- Phase 2.1 ID codec：
+  [docs/max-ratio-baselines/2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-codec.md)、
+  [openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)。

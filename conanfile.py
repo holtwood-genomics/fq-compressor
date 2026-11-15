@@ -36,7 +36,7 @@ class FQCompressorConan(ConanFile):
         "zlib-ng/*:zlib_compat": True,
     }
     exports = "VERSION"
-    exports_sources = "VERSION", "CMakeLists.txt", "src/*", "include/*", "tests/*"
+    exports_sources = "VERSION", "CMakeLists.txt", "src/*", "include/*", "tests/*", "tools/*", "third_party/*"
 
     def set_version(self):
         self.version = load(self, os.path.join(self.recipe_folder, "VERSION")).strip()

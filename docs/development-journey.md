@@ -89,3 +89,79 @@ N=4 并行编码**未带来近线性提升**。诊断（详见 `docs/postmortems
 4. 抽象克制：有第三个重复模式再抽泛型，别预先造框架。
 5. 不稳定环境靠多证据交叉判无回归，不靠单次性能数字。
 6. 课程有终点：A–H 收束后不再为了练而叠阶段；下一步是真实语料验收，而不是阶段 J。
+
+## 2026-11：从“调压缩比参数”转向“最高压缩比结构研究”
+
+并发课程 A–H 收束后，问题从“流水线还能怎么快”转成了“压缩比还能不能明显提升”。一开始的
+直觉是调 zstd 档位、质量值 delta、帧大小；实测后否掉了这条轻量路线：
+
+- 本地真实 HiSeq 小样本（25k reads、101 bp）当前 FQC 约 4.0006× 原始；质量流占归档约 51%，
+  序列约 42%，ID 约 7.5%。
+- 序列 2-bit 打包后 zstd 几乎不再缩小；帧大小 1/2/4/8 MiB 对压缩比几乎没有影响。
+- 质量值 delta/transpose/6-bit 在真实 HiSeq 上大多更差；合成数据上的 −18% delta 收益
+  不能外推。
+- 2025 年独立 benchmark 与 ORA/Genozip/SPRING/PgRC2/Mstcom/FQSqueezer/fqxv 的对比说明：
+  10×–20× 区间来自参考映射、全局伪基因组/重排、质量上下文编码，不是通用压缩器调参。
+
+因此把“最高压缩比”从 fast 路径的优化项里拆出来，作为独立专项：`max-ref` 追求有参绝对
+最高压缩比，`max-ref-free` 追求无参最高压缩比；默认保序、不存 permutation，质量值优先
+复用 htscodecs fqzcomp（策略 0/1 自适应，zstd 回退）。
+
+2026-11-15 落地 Phase 0 测量底座 `fqc_ratio_probe`：独立 byte-preserving scanner，保留
+`+` 行、CRLF/LF、空 read 和无最终换行，输出 `fqc-ratio-probe/v1` JSON；开发目标不安装，
+不进入主 CLI。真实 HiSeq 基线与 SHA 见
+[docs/max-ratio-baselines/2026-11-15-hiseq.md](max-ratio-baselines/2026-11-15-hiseq.md)，
+工具说明见 [tools/ratio_probe/README.md](../tools/ratio_probe/README.md)。
+
+同一天用 htscodecs `v1.6.7` 做 Phase 1 质量 codec 探针 `fqc_quality_probe`：
+HiSeq 全质量 fqzcomp 558,189 B vs zstd19 678,308 B（−17.7%）；NovaSeq
+`DRR174812` 分箱质量头部 2,159,788 B vs 2,802,326 B（−22.9%）；WGS
+`SRR14724532` 分箱质量头部 2,168,649 B vs 2,823,235 B（−23.2%）。按当前 FQC 归档
+只替换质量流估算，三者总归档都可缩约 15.5%–16.6%；但这是估算，不是已实现的 max-ratio 归档。
+数据集 manifest 见 [datasets.md](max-ratio-baselines/datasets.md)，完整实验见
+[2026-11-15-quality-codecs.md](max-ratio-baselines/2026-11-15-quality-codecs.md)，
+工具见 [tools/quality_probe/README.md](../tools/quality_probe/README.md)。
+随后把质量 codec 落成 Phase 1 实验容器 `fqc-max/v1`：独立 magic/头部/footer，ID 与
+2-bit sequence 复用 v2 逻辑流，质量按块在 fqzcomp 与 zstd19 间取较小者。真实 HiSeq /
+NovaSeq 头部 / WGS 头部归档分别为 1,285,285 / 12,280,644 / 12,828,169 B，相对当前 v2
+−21.36% / −24.87% / −23.69%，对应 5.087× / 8.165× / 7.790× raw；`max-verify` 与解压
+后 `cmp` 均通过。见
+[2026-11-15-max-container.md](max-ratio-baselines/2026-11-15-max-container.md)。
+
+Phase 2 继续把“参考”从设计变成可执行原型：开发工具 `fqc_ref_archive` 读取
+FASTQ + external reference FASTA + PAF sidecar，把 mapped read 编码为 contig
+id/target offset/方向/mismatch delta，未映射或非纯 `<len>M` read 回退 literal；质量流
+仍按块在 fqzcomp 与 zstd19 间取较小者。5 Mb 随机参考 + wgsim 3× 双端 150 bp 上，
+R1 17,423,235 B → 827,688 B（21.050× raw），R2 → 827,546 B（21.054× raw），
+`verify` 与解压 `cmp` 通过，重复压缩 SHA 一致。但这只是机制验证：参考不计入、质量恒定
+Q23、随机参考、只接受纯 M 比对，不是人类 30× WGS 的第一梯队结论。见
+[2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)、
+[Phase 2 格式契约](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)。
+
+Phase 2.1 把 ID 流从“整段 raw + zstd”改成自适应 front coding：每块同时尝试 raw 与
+“与上一条记录的公共前缀 + 后缀”两种逻辑流，各自 zstd19 后取较小者。真实 WGS/NovaSeq
+头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID 合成 R1 为 331,553 B
+（53.385× raw），`verify`/`cmp` 通过。这个数字仍是合成机制验证，不是真实 WGS。见
+[ID codec 基线](max-ratio-baselines/2026-11-15-id-codec.md)、
+[ID codec 契约](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)。
+
+但 `--max-ratio` 顶层开关、内置 mapper/BAM、参考嵌入、clip/indel、Phase 3 伪基因组与
+`+` 行/CRLF/空 read 的逐字节保真仍未实现；两个实验容器/原型都只覆盖 canonical LF
+FASTQ。
+
+- 设计、证据矩阵与本地实验：[docs/max-ratio-design.md](max-ratio-design.md)
+- 决策：[ADR-0003](decisions/0003-max-ratio-mode.md)
+- 参考原型实测：[docs/max-ratio-baselines/2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)
+- 参考原型契约：[openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)
+- 参考原型笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md)
+- ID codec 实测：[docs/max-ratio-baselines/2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-codec.md)
+- ID codec 契约：[openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)
+- ID codec 笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md)
+- 提案笔记：[.agents/notes/proposed/architecture/2026-11-14-max-ratio-mode.md](../.agents/notes/proposed/architecture/2026-11-14-max-ratio-mode.md)
+- 旧调研的适用范围修正：[docs/fastq-compression-survey.md](fastq-compression-survey.md)
+- Phase 0 测量底座提案：[openspec/changes/2026-11-14-max-ratio-phase0-benchmark](../openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md)
+- 质量 codec 提案：[openspec/changes/2026-11-15-max-ratio-quality-codec](../openspec/changes/2026-11-15-max-ratio-quality-codec/proposal.md)
+- Phase 1 容器契约：[openspec/changes/2026-11-15-max-ratio-phase1-container](../openspec/changes/2026-11-15-max-ratio-phase1-container/proposal.md)
+- 实验容器基线：[docs/max-ratio-baselines/2026-11-15-max-container.md](max-ratio-baselines/2026-11-15-max-container.md)
+- 容器实现笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase1-container.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase1-container.md)
+- 数据集 manifest：[docs/max-ratio-baselines/datasets.md](max-ratio-baselines/datasets.md)

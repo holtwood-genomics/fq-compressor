@@ -69,12 +69,26 @@ cmp -s "${TEST_DIR}/sample.fastq" "${TEST_DIR}/gzip-stdin-restored.fastq"
 cmp -s "${TEST_DIR}/sample.fastq" "${TEST_DIR}/stdout-restored.fastq"
 cmp -s "${TEST_DIR}/sample.fastq" "${TEST_DIR}/pipeline-restored.fastq"
 
+# Experimental fqc-max/v1: fqzcomp quality path must round-trip and verify.
+"${FQC_BIN}" -q max-compress -i "${TEST_DIR}/sample.fastq" \
+    -o "${TEST_DIR}/sample.fqmx" --profile illumina
+"${FQC_BIN}" -q max-verify "${TEST_DIR}/sample.fqmx"
+"${FQC_BIN}" -q max-decompress -i "${TEST_DIR}/sample.fqmx" \
+    -o "${TEST_DIR}/max-restored.fastq"
+cmp -s "${TEST_DIR}/sample.fastq" "${TEST_DIR}/max-restored.fastq"
+
 # Empty FASTQ produces a valid zero-frame archive and restores to an empty file.
 : > "${TEST_DIR}/empty.fastq"
 "${FQC_BIN}" -q compress -i "${TEST_DIR}/empty.fastq" -o "${TEST_DIR}/empty.fqc"
 "${FQC_BIN}" -q verify "${TEST_DIR}/empty.fqc"
 "${FQC_BIN}" -q decompress -i "${TEST_DIR}/empty.fqc" -o "${TEST_DIR}/empty-restored.fastq"
 cmp -s "${TEST_DIR}/empty.fastq" "${TEST_DIR}/empty-restored.fastq"
+"${FQC_BIN}" -q max-compress -i "${TEST_DIR}/empty.fastq" \
+    -o "${TEST_DIR}/empty.fqmx"
+"${FQC_BIN}" -q max-verify "${TEST_DIR}/empty.fqmx"
+"${FQC_BIN}" -q max-decompress -i "${TEST_DIR}/empty.fqmx" \
+    -o "${TEST_DIR}/empty-max-restored.fastq"
+cmp -s "${TEST_DIR}/empty.fastq" "${TEST_DIR}/empty-max-restored.fastq"
 
 # Concatenated gzip members are accepted when the gzip stream arrives on stdin.
 cat > "${TEST_DIR}/member-1.fastq" <<'EOF'

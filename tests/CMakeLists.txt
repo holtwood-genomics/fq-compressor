@@ -99,6 +99,23 @@ fqc_add_test(compressed_stream_test
     SOURCES io/compressed_stream_test.cpp
 )
 
+# Phase 0 ratio probe (development-only measurement tool)
+fqc_add_test(ratio_probe_test
+    SOURCES tools/ratio_probe_test.cpp
+    LIBRARIES fqc_ratio_probe_lib
+)
+
+# Experimental fqc-max/v1 container
+fqc_add_test(max_archive_test
+    SOURCES format/max_archive_test.cpp
+)
+
+# Reference-backed fqc-max-ref/v1 prototype
+fqc_add_test(ref_archive_test
+    SOURCES tools/ref_archive_test.cpp
+    LIBRARIES fqc_ref_archive_lib
+)
+
 # V2 end-to-end archive engine tests
 fqc_add_test(archive_engine_test
     SOURCES commands/archive_engine_test.cpp

@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "fqc/commands/archive_engine.h"
+#include "fqc/commands/max_ratio_engine.h"
 #include "fqc/common/error.h"
 #include "fqc/format/archive.h"
 #include "fqc/log.h"
@@ -48,6 +49,26 @@ struct DecompressOptions {
 };
 
 struct VerifyOptions {
+    std::string input;
+};
+
+struct MaxCompressOptions {
+    std::string input;
+    std::string output;
+    std::string profile = "auto";
+    std::uint64_t blockBases = 4'000'000;
+    std::uint64_t maxBlockMiB = 128;
+    int zstdLevel = 19;
+    bool force = false;
+};
+
+struct MaxDecompressOptions {
+    std::string input;
+    std::string output;
+    bool force = false;
+};
+
+struct MaxVerifyOptions {
     std::string input;
 };
 
@@ -106,6 +127,9 @@ auto run(int argc, char* argv[]) -> int {
     CompressOptions compress;
     DecompressOptions decompress;
     VerifyOptions verify;
+    MaxCompressOptions maxCompress;
+    MaxDecompressOptions maxDecompress;
+    MaxVerifyOptions maxVerify;
 
     CLI::App app{"fq-compressor v2: bounded-memory, lossless FASTQ compression"};
     app.set_version_flag("-V,--version", FQC_VERSION);
@@ -165,6 +189,51 @@ auto run(int argc, char* argv[]) -> int {
     verifyCommand->alias("v");
     verifyCommand->add_option("input,-i,--input", verify.input, "FQC v2 input")->required();
 
+    auto* maxCompressCommand =
+        app.add_subcommand("max-compress", "Experimental fqc-max/v1: fqzcomp quality, ratio-first");
+    maxCompressCommand->alias("mc");
+    maxCompressCommand
+        ->add_option("-i,--input", maxCompress.input, "Primary FASTQ input, or '-' for stdin")
+        ->required();
+    maxCompressCommand->add_option("-o,--output", maxCompress.output, "fqc-max/v1 output")
+        ->required();
+    maxCompressCommand
+        ->add_option("--profile",
+                     maxCompress.profile,
+                     "Dataset profile: auto, illumina, ont, pacbio-hifi, pacbio-clr")
+        ->default_val("auto")
+        ->check(CLI::IsMember({"auto", "illumina", "ont", "pacbio-hifi", "pacbio-clr"}));
+    maxCompressCommand
+        ->add_option("--block-bases", maxCompress.blockBases, "Target bases per quality block")
+        ->default_val(4'000'000)
+        ->check(CLI::PositiveNumber);
+    maxCompressCommand
+        ->add_option("--max-block-mib", maxCompress.maxBlockMiB, "Maximum raw block size in MiB")
+        ->default_val(128)
+        ->check(CLI::PositiveNumber);
+    maxCompressCommand
+        ->add_option("--zstd-level", maxCompress.zstdLevel, "zstd level for ID/sequence streams")
+        ->default_val(19)
+        ->check(CLI::Range(1, fqc::format::kMaxZstdLevel));
+    maxCompressCommand->add_flag("-f,--force", maxCompress.force, "Overwrite an existing output");
+
+    auto* maxDecompressCommand =
+        app.add_subcommand("max-decompress", "Decompress an experimental fqc-max/v1 archive");
+    maxDecompressCommand->alias("mx");
+    maxDecompressCommand->add_option("-i,--input", maxDecompress.input, "fqc-max/v1 input")
+        ->required();
+    maxDecompressCommand
+        ->add_option("-o,--output", maxDecompress.output, "FASTQ output, or '-' for stdout")
+        ->required();
+    maxDecompressCommand->add_flag(
+        "-f,--force", maxDecompress.force, "Overwrite an existing output");
+
+    auto* maxVerifyCommand = app.add_subcommand(
+        "max-verify", "Fully decode and verify an experimental fqc-max/v1 archive");
+    maxVerifyCommand->alias("mv");
+    maxVerifyCommand->add_option("input,-i,--input", maxVerify.input, "fqc-max/v1 input")
+        ->required();
+
     try {
         app.parse(argc, argv);
     } catch (const CLI::ParseError& error) {
@@ -218,6 +287,44 @@ auto run(int argc, char* argv[]) -> int {
                 return reportError(result);
             }
             logStats("verification", *result, global.quiet);
+        } else if (*maxCompressCommand) {
+            auto maxBlockBytes = checkedMiB(maxCompress.maxBlockMiB, "--max-block-mib");
+            if (!maxBlockBytes) {
+                return reportError(maxBlockBytes);
+            }
+            auto profile = resolveProfile(maxCompress.profile);
+            if (!profile) {
+                return reportError(profile);
+            }
+            auto result =
+                fqc::commands::MaxRatioEngine::compress({.inputPath = maxCompress.input,
+                                                         .outputPath = maxCompress.output,
+                                                         .profile = *profile,
+                                                         .memoryLimitBytes = *memoryLimit,
+                                                         .targetBlockBases = maxCompress.blockBases,
+                                                         .maxBlockBytes = *maxBlockBytes,
+                                                         .zstdLevel = maxCompress.zstdLevel,
+                                                         .forceOverwrite = maxCompress.force});
+            if (!result) {
+                return reportError(result);
+            }
+            logStats("max compression", *result, global.quiet);
+        } else if (*maxDecompressCommand) {
+            auto result =
+                fqc::commands::MaxRatioEngine::decompress({.inputPath = maxDecompress.input,
+                                                           .outputPath = maxDecompress.output,
+                                                           .memoryLimitBytes = *memoryLimit,
+                                                           .forceOverwrite = maxDecompress.force});
+            if (!result) {
+                return reportError(result);
+            }
+            logStats("max decompression", *result, global.quiet);
+        } else if (*maxVerifyCommand) {
+            auto result = fqc::commands::MaxRatioEngine::verify(maxVerify.input, *memoryLimit);
+            if (!result) {
+                return reportError(result);
+            }
+            logStats("max verification", *result, global.quiet);
         }
         return 0;
     } catch (const std::exception& error) {

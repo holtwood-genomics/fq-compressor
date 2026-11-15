@@ -3,10 +3,25 @@
 FQC v2 是一种顺序帧归档格式，围绕四个目标设计：内存有界、管道友好、故障边界清晰、吞吐量可量化。
 v1 兼容、索引、随机访问、全局 read 重排序、第二套并行引擎——一概不做。
 
-对外产品形态只有 `fqc` CLI。`fqc_core`、`fqc_cli` 这两个构建目标以及 `include/fqc` 下的头文件，
-纯粹是为了组织源码和测试，不对外安装，也没有任何源码或 ABI 兼容承诺。
+> 本文描述当前 `fqc-sequential/v2` fast 路径；“不做全局重排序/第二套引擎”是当前 v2 的边界。
+> 2026-11 的 max-ratio 设计草案另开独立引擎与格式族；Phase 0 测量工具、Phase 1 质量
+> codec 探针/实验容器 `fqc-max/v1`、Phase 2 PAF 参考原型 `fqc-max-ref/v1` 已实现；
+> Phase 2 真实 30× WGS 与 Phase 3 未完成。容器/原型与 v2 格式/流水线独立，默认 CLI
+> 不变。见 [docs/max-ratio-design.md](docs/max-ratio-design.md)、
+> [质量 codec 基线](docs/max-ratio-baselines/2026-11-15-quality-codecs.md)、
+> [实验容器基线](docs/max-ratio-baselines/2026-11-15-max-container.md) 与
+> [参考原型基线](docs/max-ratio-baselines/2026-11-15-ref-container.md)。
+
+对外产品形态只有 `fqc` CLI；`fqc_ratio_probe`、`fqc_quality_probe` 与
+`fqc_ref_archive` 是开发/验收工具，不安装、不进入产品 CLI。`fqc_core`、`fqc_cli`
+这两个构建目标以及 `include/fqc` 下的头文件，纯粹是为了组织源码和测试，不对外安装，
+也没有任何源码或 ABI 兼容承诺。
 
 ## 数据流
+
+![压缩流水线：主线程采样与 parser×K / 单 reader 两条入口，经有界 MPMC 队列进入 encoder×N，ChunkOrderer 保序写盘](docs/pipeline-compress.svg)
+
+![解压流水线：ArchiveReader 读帧，decoder×N 并行解码，writer reorder 保序提交，decompress 与 verify 仅 sink 不同](docs/pipeline-decompress.svg)
 
 ```text
 压缩路径（未压缩普通文件，阶段 H）：
@@ -134,6 +149,21 @@ encoder 状态帧内局部，worker 间无需共享可变状态。profile 采样
 - XXH64 用于发现随机损坏，不提供对恶意篡改的密码学认证。
 - v1 输入直接拒绝，没有任何部分兼容或启发式猜测的路径。
 
+## max-ratio 实验原型（独立于 v2 流水线）
+
+`fqc-max/v1`（`max-compress`/`max-decompress`/`max-verify`）在 `fqc::format` /
+`fqc::commands` 中实现，复用 v2 的 ID/2-bit 逻辑流与 fqzcomp 质量块；它不进入 fast
+流水线，默认 CLI 与 `fqc-sequential/v2` 不变。
+
+`fqc-max-ref/v1`（开发工具 `tools/ref_archive`）是 Phase 2 参考原型：FASTQ + external
+reference + PAF sidecar → contig/offset/orientation/mismatch 编码 + literal 回退；质量流
+fqzcomp/zstd 自适应；解压只需同一参考。它在合成 5 Mb/3× 数据上约 21.05× raw，但参考不
+计入、质量恒定、只接受纯 `<len>M`，不是人类 30× WGS 结论。Phase 2.1 在同一 block header
+的 `idCodec` 字段增加 front coding：每块在 raw 与 front-coded ID 逻辑流各自 zstd19 后
+取较小者；真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw。见
+[Phase 2 基线](docs/max-ratio-baselines/2026-11-15-ref-container.md) 与
+[ID codec 基线](docs/max-ratio-baselines/2026-11-15-id-codec.md)。
+
 ## 模块
 
 | 命名空间 | 职责 |
@@ -142,6 +172,7 @@ encoder 状态帧内局部，worker 间无需共享可变状态。profile 采样
 | `fqc::commands` | profile 判定与单引擎有界执行 |
 | `fqc::io` | FASTQ 解析、gzip 输入、文件/stdin/stdout 流工厂 |
 | `fqc::common` | 记录、结构化错误、日志 |
+| `fqc::tools::ref` | Phase 2 开发工具：参考/PAF 实验归档（不安装） |
 
 旧版的 ABC、SCM、v1 格式/索引/重排序映射、异步 I/O 孤岛、双端解析器、TBB 流水线——
 全部删干净了，没有留一行死代码。

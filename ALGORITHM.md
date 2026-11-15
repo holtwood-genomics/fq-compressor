@@ -121,8 +121,17 @@ varint(记录数)
 1. **无损是硬约束。** 质量值承载变异检测的统计权重，任何有损变换都会改变下游分析结果。
 2. **Zstd 已经够用。** 质量值的字母表只有 ~94 个可打印 ASCII 字符（`!` 到 `~`），
    且同一 run 内分布模式重复，Zstd 的字典匹配能有效利用这些冗余。
-3. **专用编解码器尚未通过准入门槛。** 架构文档中提到，所有 profile 目前共用同一套回退编码——
+3. **专用编解码器尚未通过 fast 路径的准入门槛。** 架构文档中提到，所有 profile 目前共用同一套回退编码——
    还没有哪个专门的质量值编解码器能在足够大的真实语料上同时通过体积和吞吐量测试。
+
+> 以上取舍限定于 **fast 流式路径**。最高压缩比专项重新评估质量值上下文建模与读取重排；
+> 本地探针已验证 htscodecs fqzcomp 在 HiSeq 全质量比 zstd19 小 17.7%、在 NovaSeq
+> RNA-Seq 分箱质量头部小 22.9%、在 WGS 分箱质量头部小 23.2%，而不是继续调 zstd 档位。设计见
+> [docs/max-ratio-design.md](docs/max-ratio-design.md)，实验见
+> [docs/max-ratio-baselines/2026-11-15-quality-codecs.md](docs/max-ratio-baselines/2026-11-15-quality-codecs.md)。
+> 当前 CLI 有实验 `max-compress` 子命令与 `fqc-max/v1` 容器；参考路线另有开发工具
+> `fqc_ref_archive` / `fqc-max-ref/v1`。`--max-ratio` 顶层开关、内置 mapper/BAM、Phase 3
+> 伪基因组与最终逐字节格式仍未实现，Phase 2 真实 30× WGS 尚未验收。
 
 **无损边界**：这里的"无损"指**字段级**无损——ID/sequence/quality 的字节序列在
 压缩-解压往返后逐字节保留。文件级的逐字节往返（`cmp` 一致）还要求输入为 LF-only
@@ -196,6 +205,45 @@ Footer 的滚动校验和把每帧的 8 字节校验和依次喂入全局 XXH64�
 `verify` 命令走完全相同的解码和校验流程，只是不写 FASTQ 输出——
 因此 CPU/内存成本与 `decompress` 同量级，不是常数时间的元数据检查。
 
+## 最高压缩比专项（Phase 1/2 实验原型已实现；Phase 3 未实现）
+
+当前文档的“质量值直通”“不重排”“不做参考”都是 fast 路径的设计取舍，不是对最高压缩比的
+最终结论。若目标是 10×–20×+，需要把序列的跨 read 冗余（参考/伪基因组/重排）与质量值的
+条件熵（上下文模型 + range coder/rANS）一起处理；完整设计、证据分级与本地实验见
+[docs/max-ratio-design.md](docs/max-ratio-design.md)，路线图见 [docs/roadmap.md](docs/roadmap.md)。
+
+已实现的部分：
+
+- `fqc_ratio_probe`：Phase 0 字节/流级基线，见
+  [tools/ratio_probe/README.md](tools/ratio_probe/README.md)；
+- `fqc_quality_probe`：Phase 1 fqzcomp vs zstd 质量流探针，见
+  [tools/quality_probe/README.md](tools/quality_probe/README.md) 与
+  [质量 codec 基线](docs/max-ratio-baselines/2026-11-15-quality-codecs.md)；
+- `fqc-max/v1` 实验容器与 `max-compress`/`max-decompress`/`max-verify`：复用 v2
+  逻辑流，质量流 fqzcomp 分块自适应，独立 magic/校验和；实测 HiSeq 5.087× raw、
+  NovaSeq 头部 8.165× raw、WGS 头部 7.790× raw，`max-verify` 与 `cmp` 通过。见
+  [实验容器基线](docs/max-ratio-baselines/2026-11-15-max-container.md) 与
+  [格式契约](openspec/changes/2026-11-15-max-ratio-phase1-container/design.md)。
+- `fqc_ref_archive` + `fqc-max-ref/v1`：外部参考 + PAF 位置/方向/mismatch +
+  fqzcomp 质量流；合成 5 Mb 参考 / 3× 双端 150 bp 上 R1/R2 约 21.05× raw，
+  `verify`/`cmp` 通过。参考不计入、恒定 Q23、只接受纯 `<len>M`，是 Phase 2 机制验证，
+  不是人类 30× WGS 结论。Phase 2.1 加入自适应 ID front coding（`idCodec=2`）：真实
+  WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID 合成 R1
+  331,553 B（53.385× raw），同样是机制验证。见
+  [参考原型基线](docs/max-ratio-baselines/2026-11-15-ref-container.md)、
+  [ID codec 基线](docs/max-ratio-baselines/2026-11-15-id-codec.md)、
+  [格式契约](openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)、
+  [ID codec 契约](openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)。
+
+Phase 0 提案见
+[openspec/changes/2026-11-14-max-ratio-phase0-benchmark](openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md)，
+质量 codec 提案见
+[openspec/changes/2026-11-15-max-ratio-quality-codec](openspec/changes/2026-11-15-max-ratio-quality-codec/proposal.md)，
+参考原型契约见
+[openspec/changes/2026-11-15-max-ratio-phase2-ref](openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)。
+它们都不改变 `fqc-sequential/v2` 或默认 CLI；`max-compress` 与 `fqc_ref_archive` 是
+显式实验入口，不是默认 max-ratio，也不覆盖 `+` 行/CRLF/空 read 的逐字节边界。
+
 ## 设计取舍
 
 | 选择 | 收益 | 代价 |
@@ -203,6 +251,6 @@ Footer 的滚动校验和把每帧的 8 字节校验和依次喂入全局 XXH64�
 | 列式分离 | Zstd 字典效率大幅提升 | 编解码需要三趟遍历 |
 | 2-bit 打包 | 序列 4:1 压缩，最大单一贡献 | 异常碱基需要额外列表 |
 | Zstd level 1 | 高吞吐（>50 MiB/s 压缩） | 比高级别少 2–5% 压缩比 |
-| 质量值不编码 | 实现简单，无损保证 | 压缩比瓶颈 |
+| 质量值不编码（fast 模式） | 实现简单，无损保证 | 压缩比瓶颈；max-ratio 专项另评估上下文编码 |
 | 未压缩流校验和 | 检测 Zstd 静默错误 | 校验和计算在解压后的数据上 |
 | 增量编码异常位置 | 避免 per-base 对象分配 | 异常密集时列表较长 |

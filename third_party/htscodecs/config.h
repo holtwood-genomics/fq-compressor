@@ -1,0 +1,1 @@
+#define HAVE_BUILTIN_PREFETCH 1
