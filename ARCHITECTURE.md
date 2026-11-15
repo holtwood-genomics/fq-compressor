@@ -192,11 +192,14 @@ writer 生命周期，也不引入 DAG 或调度器。handler 返回 `Result<T>`
 流水线，默认 CLI 与 `fqc-sequential/v2` 不变。
 
 `fqc-max-ref/v1`（开发工具 `tools/ref_archive`）是 Phase 2 参考原型：FASTQ + external
-reference + PAF sidecar → contig/offset/orientation/mismatch 编码 + literal 回退；质量流
-fqzcomp/zstd 自适应；解压只需同一参考。它在合成 5 Mb/3× 数据上约 21.05× raw，但参考不
-计入、质量恒定、只接受纯 `<len>M`，不是人类 30× WGS 结论。Phase 2.1 在同一 block header
-的 `idCodec` 字段增加 front coding：每块在 raw 与 front-coded ID 逻辑流各自 zstd19 后
-取较小者；真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw。见
+reference + PAF sidecar → contig/offset/orientation/mismatch/CIGAR 编码 + literal 回退；
+质量流 fqzcomp/zstd 自适应；解压只需同一参考。Phase 2.2 支持 PAF `M/=/X/I/D` 与左右
+clip，纯 M 仍用旧布局；它在合成 5 Mb/3× 数据上 R1/R2 为 792,217/796,633 B
+（21.993×/21.871× raw），但参考不计入、质量恒定、不支持 `S/H/N/P`，不是人类 30× WGS
+结论。Phase 2.1 在同一 block header 的 `idCodec` 字段增加 front coding：每块在 raw 与
+front-coded ID 逻辑流各自 zstd19 后取较小者；真实 WGS/NovaSeq 头部 ID 探针约 −99%，
+随机 wgsim ID 自动回退 raw。见
+[Phase 2.2 基线](docs/max-ratio-baselines/2026-11-15-ref-cigar.md)、
 [Phase 2 基线](docs/max-ratio-baselines/2026-11-15-ref-container.md) 与
 [ID codec 基线](docs/max-ratio-baselines/2026-11-15-id-codec.md)。
 

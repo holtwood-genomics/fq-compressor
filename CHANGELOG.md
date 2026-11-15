@@ -4,6 +4,22 @@
 
 ### 新增
 
+- **Phase 2.2 `fqc-max-ref/v1` clip/indel CIGAR 编码**：在既有 per-read flags 上增加
+  `EXTENDED` bit，支持 PAF `M/=/X/I/D` 与 `queryStart/queryEnd` 表达的左右 clip；I 存
+  base code，D 不存序列，负链在 reverse-complement 后的 aligned query 上执行 CIGAR，
+  纯全长 M 保持旧布局。`S/H/N/P`、空/零长度/超限操作、坐标消费量不一致仍回退 literal。
+  合成 5 Mb 参考 + wgsim 3× 双端 150 bp：R1 17,423,235 B → **792,217 B
+  （21.993× raw）**，mapped 49,998 / literal 2 / clipped 51 / indel 753；
+  R2 → **796,633 B（21.871× raw）**，mapped 50,000 / literal 0 / clipped 44 /
+  indel 745；R1 alignment 流 330,759 → 295,288 B，R2 330,199 → 299,286 B；
+  `verify` 与解压 `cmp` 通过，R1 重复压缩逐字节一致。结构化 ID R1 由 331,553 B
+  降到 **296,082 B（59.781× raw）**。旧 Phase 2 归档仍可 `verify`。**边界**：参考不计入；
+  质量恒定 Q23；只支持 PAF CIGAR，不支持 S/H/N/P、长读 spliced alignment、BAM/CRAM、
+  内置 mapper、paired-end 联合或真实 30× WGS 验收；canonical LF 之外的字节保真仍未实现。
+  → 详见 `docs/max-ratio-baselines/2026-11-15-ref-cigar.md`、
+  `openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md`、
+  `.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-cigar.md`
+
 - **Phase 1 实验容器 `fqc-max/v1`（ratio-first 原型）**：新增独立 magic/全局头/块头/
   footer，以及 `max-compress`/`max-decompress`/`max-verify`（别名 `mc`/`mx`/`mv`）。
   ID 与 2-bit packed sequence 复用 v2 逻辑流，外层 zstd19；质量流按块在 htscodecs

@@ -55,7 +55,8 @@
 
 ## Notes
 
-- 本 change **不是**最终 max-ratio：没有内置 mapper、BAM sidecar、clip/indel、参考嵌入、
+- 本 change **不是**最终 max-ratio：没有内置 mapper、BAM sidecar、clip/indel（Phase 2.2
+  已用独立 change 实现）、参考嵌入、
   SHA-256、paired-end 联合、数字 ID token/delta、原子输出、内存上限、并发或真实 30× WGS。
 - 21.05× 是 5 Mb 合成参考 + wgsim 3× + 恒定 Q23 + 纯 `<len>M` 的机制验证；参考不计入
   归档；不能外推为人类 WGS 或 ORA/Genozip 等价结果。

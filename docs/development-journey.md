@@ -130,13 +130,14 @@ NovaSeq 头部 / WGS 头部归档分别为 1,285,285 / 12,280,644 / 12,828,169 B
 
 Phase 2 继续把“参考”从设计变成可执行原型：开发工具 `fqc_ref_archive` 读取
 FASTQ + external reference FASTA + PAF sidecar，把 mapped read 编码为 contig
-id/target offset/方向/mismatch delta，未映射或非纯 `<len>M` read 回退 literal；质量流
-仍按块在 fqzcomp 与 zstd19 间取较小者。5 Mb 随机参考 + wgsim 3× 双端 150 bp 上，
-R1 17,423,235 B → 827,688 B（21.050× raw），R2 → 827,546 B（21.054× raw），
-`verify` 与解压 `cmp` 通过，重复压缩 SHA 一致。但这只是机制验证：参考不计入、质量恒定
-Q23、随机参考、只接受纯 M 比对，不是人类 30× WGS 的第一梯队结论。见
-[2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)、
-[Phase 2 格式契约](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)。
+id/target offset/方向/mismatch/CIGAR delta，未映射或复杂 CIGAR read 回退 literal；
+质量流仍按块在 fqzcomp 与 zstd19 间取较小者。Phase 2.2 加入 `M/=/X/I/D` 与左右
+clip 后，5 Mb 随机参考 + wgsim 3× 双端 150 bp 上，R1 17,423,235 B → 792,217 B
+（21.993× raw），R2 → 796,633 B（21.871× raw），`verify` 与解压 `cmp` 通过，R1
+重复压缩 SHA 一致。但这只是机制验证：参考不计入、质量恒定 Q23、随机参考、不支持
+`S/H/N/P`，不是人类 30× WGS 的第一梯队结论。见
+[2026-11-15-ref-cigar.md](max-ratio-baselines/2026-11-15-ref-cigar.md)、
+[Phase 2.2 格式契约](../openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md)。
 
 Phase 2.1 把 ID 流从“整段 raw + zstd”改成自适应 front coding：每块同时尝试 raw 与
 “与上一条记录的公共前缀 + 后缀”两种逻辑流，各自 zstd19 后取较小者。真实 WGS/NovaSeq
@@ -145,9 +146,15 @@ Phase 2.1 把 ID 流从“整段 raw + zstd”改成自适应 front coding：每
 [ID codec 基线](max-ratio-baselines/2026-11-15-id-codec.md)、
 [ID codec 契约](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)。
 
-但 `--max-ratio` 顶层开关、内置 mapper/BAM、参考嵌入、clip/indel、Phase 3 伪基因组与
-`+` 行/CRLF/空 read 的逐字节保真仍未实现；两个实验容器/原型都只覆盖 canonical LF
-FASTQ。
+Phase 2.2 再把 CIGAR 从“只接受纯 M”扩到 `M/=/X/I/D` 与左右 clip：纯 M 保持旧布局，
+扩展记录存 query 范围、操作表、I 的 base code 与 clip；负链在 reverse-complement 后的
+aligned query 上执行 CIGAR。R1/R2 归档因此从 827,688/827,546 B 降到
+792,217/796,633 B，mapped 49,998/50,000、literal 2/0；结构化 ID R1 从 331,553 B 降到
+296,082 B（59.781× raw）。`S/H/N/P`、长读 spliced alignment、BAM/CRAM 与真实 30× WGS
+仍未完成。
+
+但 `--max-ratio` 顶层开关、内置 mapper/BAM、参考嵌入、Phase 3 伪基因组与 `+` 行/CRLF/
+空 read 的逐字节保真仍未实现；两个实验容器/原型都只覆盖 canonical LF FASTQ。
 
 - 设计、证据矩阵与本地实验：[docs/max-ratio-design.md](max-ratio-design.md)
 - 决策：[ADR-0003](decisions/0003-max-ratio-mode.md)

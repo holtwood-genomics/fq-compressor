@@ -46,6 +46,11 @@ constexpr std::size_t kMaxStreamBytes = std::size_t{512} * 1024 * 1024;
 constexpr int kZstdLevel = 19;
 constexpr std::uint8_t kIdCodecRawZstd = 1;
 constexpr std::uint8_t kIdCodecFrontZstd = 2;
+constexpr std::uint8_t kReadFlagMapped = 0x01;
+constexpr std::uint8_t kReadFlagReverse = 0x02;
+constexpr std::uint8_t kReadFlagLiteral = 0x04;
+constexpr std::uint8_t kReadFlagExtended = 0x08;
+constexpr std::size_t kMaxCigarOps = 256;
 
 struct Contig {
     std::string name;
@@ -65,8 +70,14 @@ struct GlobalHeader {
     std::uint64_t digest = 0;
 };
 
+struct CigarOp {
+    std::uint32_t length = 0;
+    std::uint8_t code = 0;  // 0=M/=, 1=I, 2=D
+};
+
 struct PafAlignment {
     std::string target;
+    std::uint64_t queryLength = 0;
     std::uint64_t targetStart = 0;
     std::uint64_t targetEnd = 0;
     std::uint64_t queryStart = 0;
@@ -78,11 +89,17 @@ struct PafAlignment {
 };
 
 struct EncodedRead {
-    std::uint8_t flags = 4;
+    std::uint8_t flags = kReadFlagLiteral;
     std::uint64_t contigId = 0;
     std::uint64_t targetStart = 0;
     std::uint64_t readLen = 0;
+    std::uint64_t queryStart = 0;
+    std::uint64_t queryEnd = 0;
     std::uint32_t mismatches = 0;
+    std::vector<CigarOp> cigar;
+    std::vector<std::uint8_t> insertionBases;
+    std::string leftClip;
+    std::string rightClip;
     std::vector<std::pair<std::uint32_t, std::uint8_t>> edits;
     std::string literal;
 };
@@ -90,6 +107,8 @@ struct EncodedRead {
 struct BlockStats {
     std::uint64_t mapped = 0;
     std::uint64_t literal = 0;
+    std::uint64_t clipped = 0;
+    std::uint64_t indel = 0;
     std::uint64_t idsBytes = 0;
     std::uint64_t qualitiesBytes = 0;
     std::uint64_t alignmentsBytes = 0;
@@ -389,6 +408,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
 
         PafAlignment alignment;
         alignment.target = std::string(fields[5]);
+        alignment.queryLength = *queryLength;
         alignment.targetStart = *targetStart;
         alignment.targetEnd = *targetEnd;
         alignment.queryStart = *queryStart;
@@ -428,12 +448,53 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     return alignments;
 }
 
-[[nodiscard]] auto parseSimpleCigar(std::string_view cigar, std::uint64_t expectedLength) -> bool {
-    if (cigar.empty() || cigar.back() != 'M') {
-        return false;
+[[nodiscard]] auto parseCigar(std::string_view cigar) -> std::optional<std::vector<CigarOp>> {
+    if (cigar.empty()) {
+        return std::nullopt;
     }
-    const auto value = parseU64(cigar.substr(0, cigar.size() - 1));
-    return value && *value == expectedLength;
+    std::vector<CigarOp> operations;
+    std::size_t offset = 0;
+    while (offset < cigar.size()) {
+        const auto digitStart = offset;
+        while (offset < cigar.size() && cigar[offset] >= '0' && cigar[offset] <= '9') {
+            ++offset;
+        }
+        if (offset == digitStart || offset == cigar.size()) {
+            return std::nullopt;
+        }
+        const auto length = parseU64(cigar.substr(digitStart, offset - digitStart));
+        if (!length || *length == 0 || *length > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        std::uint8_t code = 0;
+        switch (cigar[offset++]) {
+            case 'M':
+            case '=':
+            case 'X':
+                code = 0;
+                break;
+            case 'I':
+                code = 1;
+                break;
+            case 'D':
+                code = 2;
+                break;
+            default:
+                return std::nullopt;
+        }
+        if (!operations.empty() && operations.back().code == code) {
+            if (operations.back().length > std::numeric_limits<std::uint32_t>::max() - *length) {
+                return std::nullopt;
+            }
+            operations.back().length += static_cast<std::uint32_t>(*length);
+        } else {
+            operations.push_back({static_cast<std::uint32_t>(*length), code});
+            if (operations.size() > kMaxCigarOps) {
+                return std::nullopt;
+            }
+        }
+    }
+    return operations;
 }
 
 [[nodiscard]] auto isAcgtn(char base) -> bool {
@@ -629,11 +690,31 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         return encoded;
     }
     const auto& alignment = found->second;
-    if (alignment.queryStart != 0 || alignment.queryEnd != record.sequence.size() ||
-        alignment.targetEnd - alignment.targetStart != record.sequence.size() ||
-        !parseSimpleCigar(alignment.cigar, record.sequence.size())) {
+    if (alignment.queryLength != record.sequence.size() ||
+        alignment.queryStart >= alignment.queryEnd || alignment.queryEnd > alignment.queryLength ||
+        alignment.targetStart >= alignment.targetEnd) {
         return encoded;
     }
+
+    auto cigar = parseCigar(alignment.cigar);
+    if (!cigar) {
+        return encoded;
+    }
+    std::uint64_t querySpan = 0;
+    std::uint64_t targetSpan = 0;
+    for (const auto& op : *cigar) {
+        if (op.code == 0 || op.code == 1) {
+            querySpan += op.length;
+        }
+        if (op.code == 0 || op.code == 2) {
+            targetSpan += op.length;
+        }
+    }
+    if (querySpan != alignment.queryEnd - alignment.queryStart ||
+        targetSpan != alignment.targetEnd - alignment.targetStart) {
+        return encoded;
+    }
+
     const auto contig = reference.index.find(alignment.target);
     if (contig == reference.index.end()) {
         return encoded;
@@ -644,35 +725,75 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         return encoded;
     }
 
-    const auto oriented =
-        alignment.strand == '-' ? reverseComplement(record.sequence) : record.sequence;
+    const auto originalMiddle =
+        record.sequence.substr(static_cast<std::size_t>(alignment.queryStart),
+                               static_cast<std::size_t>(alignment.queryEnd - alignment.queryStart));
+    const auto orientedMiddle =
+        alignment.strand == '-' ? reverseComplement(originalMiddle) : originalMiddle;
     const auto referenceSlice = std::string_view(sequence).substr(
-        static_cast<std::size_t>(alignment.targetStart), record.sequence.size());
+        static_cast<std::size_t>(alignment.targetStart), static_cast<std::size_t>(targetSpan));
+
+    std::uint64_t queryOffset = 0;
+    std::uint64_t targetOffset = 0;
     std::uint32_t mismatches = 0;
-    for (std::size_t i = 0; i < oriented.size(); ++i) {
-        if (referenceSlice[i] != oriented[i]) {
-            ++mismatches;
+    std::uint32_t previous = 0;
+    std::vector<std::uint8_t> insertionBases;
+    std::vector<std::pair<std::uint32_t, std::uint8_t>> edits;
+    for (const auto& op : *cigar) {
+        switch (op.code) {
+            case 0:
+                for (std::uint32_t i = 0; i < op.length; ++i) {
+                    const auto queryPosition = queryOffset + i;
+                    if (referenceSlice[targetOffset + i] != orientedMiddle[queryPosition]) {
+                        edits.emplace_back(static_cast<std::uint32_t>(queryPosition) - previous,
+                                           baseCode(orientedMiddle[queryPosition]));
+                        previous = static_cast<std::uint32_t>(queryPosition);
+                        ++mismatches;
+                    }
+                }
+                queryOffset += op.length;
+                targetOffset += op.length;
+                break;
+            case 1:
+                for (std::uint32_t i = 0; i < op.length; ++i) {
+                    insertionBases.push_back(baseCode(orientedMiddle[queryOffset + i]));
+                }
+                queryOffset += op.length;
+                break;
+            case 2:
+                targetOffset += op.length;
+                break;
+            default:
+                return encoded;
         }
     }
     if (mismatches > maxMismatches) {
         return encoded;
     }
 
-    encoded.flags = 1;
+    encoded.flags = kReadFlagMapped;
     if (alignment.strand == '-') {
-        encoded.flags |= 2;
+        encoded.flags |= kReadFlagReverse;
     }
     encoded.contigId = contig->second;
     encoded.targetStart = alignment.targetStart;
+    encoded.queryStart = alignment.queryStart;
+    encoded.queryEnd = alignment.queryEnd;
     encoded.mismatches = mismatches;
-    std::uint32_t previous = 0;
-    for (std::uint32_t i = 0; i < oriented.size(); ++i) {
-        if (oriented[i] != referenceSlice[i]) {
-            encoded.edits.emplace_back(i - previous, baseCode(oriented[i]));
-            previous = i;
-        }
-    }
+    encoded.edits = std::move(edits);
     encoded.literal.clear();
+
+    const bool simple = alignment.queryStart == 0 && alignment.queryEnd == record.sequence.size() &&
+        querySpan == record.sequence.size() && targetSpan == record.sequence.size() &&
+        cigar->size() == 1 && (*cigar)[0].code == 0;
+    if (!simple) {
+        encoded.flags |= kReadFlagExtended;
+        encoded.cigar = std::move(*cigar);
+        encoded.insertionBases = std::move(insertionBases);
+        encoded.leftClip =
+            record.sequence.substr(0, static_cast<std::size_t>(alignment.queryStart));
+        encoded.rightClip = record.sequence.substr(static_cast<std::size_t>(alignment.queryEnd));
+    }
     return encoded;
 }
 
@@ -686,10 +807,47 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         const auto encoded = encodeRead(record, reference, alignments, maxMismatches);
         appendU8(alignmentsRaw, encoded.flags);
         appendVarint(alignmentsRaw, encoded.readLen);
-        if ((encoded.flags & 1U) != 0U) {
+        if ((encoded.flags & kReadFlagMapped) != 0U) {
             ++stats.mapped;
             appendVarint(alignmentsRaw, encoded.contigId);
             appendVarint(alignmentsRaw, encoded.targetStart);
+            if ((encoded.flags & kReadFlagExtended) != 0U) {
+                if (encoded.queryStart != 0 || encoded.queryEnd != encoded.readLen) {
+                    ++stats.clipped;
+                }
+                bool hasIndel = false;
+                for (const auto& op : encoded.cigar) {
+                    if (op.code != 0) {
+                        hasIndel = true;
+                        break;
+                    }
+                }
+                if (hasIndel) {
+                    ++stats.indel;
+                }
+                appendVarint(alignmentsRaw, encoded.queryStart);
+                appendVarint(alignmentsRaw, encoded.queryEnd);
+                appendVarint(alignmentsRaw, encoded.cigar.size());
+                std::size_t insertionOffset = 0;
+                for (const auto& op : encoded.cigar) {
+                    appendVarint(alignmentsRaw, op.length);
+                    appendU8(alignmentsRaw, op.code);
+                    if (op.code == 1) {
+                        for (std::uint32_t i = 0; i < op.length; ++i) {
+                            appendU8(alignmentsRaw, encoded.insertionBases[insertionOffset + i]);
+                        }
+                        insertionOffset += op.length;
+                    }
+                }
+                appendVarint(alignmentsRaw, encoded.leftClip.size());
+                for (const auto base : encoded.leftClip) {
+                    appendU8(alignmentsRaw, baseCode(base));
+                }
+                appendVarint(alignmentsRaw, encoded.rightClip.size());
+                for (const auto base : encoded.rightClip) {
+                    appendU8(alignmentsRaw, baseCode(base));
+                }
+            }
             appendVarint(alignmentsRaw, encoded.mismatches);
             for (const auto& [delta, base] : encoded.edits) {
                 appendVarint(alignmentsRaw, delta);
@@ -961,15 +1119,36 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         auto flags = alignmentCursor.readU8();
         auto readLength = alignmentCursor.readVarint();
         if (!flags || !readLength || *readLength == 0 || *readLength != qualities[i].size() ||
-            (*flags & ~0x07U) != 0U) {
+            (*flags & ~0x0FU) != 0U) {
             return makeError<DecodedBlock>(ErrorCode::kFormatError, "invalid read flags/length");
         }
-        const bool literal = (*flags & 0x04U) != 0U;
-        const bool mapped = (*flags & 0x01U) != 0U;
-        if (literal == mapped || (literal && (*flags & 0x02U) != 0U)) {
+        const bool literal = (*flags & kReadFlagLiteral) != 0U;
+        const bool mapped = (*flags & kReadFlagMapped) != 0U;
+        const bool reverse = (*flags & kReadFlagReverse) != 0U;
+        const bool extended = (*flags & kReadFlagExtended) != 0U;
+        if (literal == mapped || (literal && (reverse || extended))) {
             return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                            "read must be mapped xor literal");
         }
+
+        const auto applyMismatches =
+            [&](std::string& target, std::uint64_t count, std::uint64_t limit) -> bool {
+            std::uint64_t previous = 0;
+            for (std::uint64_t edit = 0; edit < count; ++edit) {
+                auto delta = alignmentCursor.readVarint();
+                auto base = alignmentCursor.readU8();
+                if (!delta || !base || *base > 4U) {
+                    return false;
+                }
+                const auto position = previous + *delta;
+                if (position >= limit || (edit > 0 && position <= previous)) {
+                    return false;
+                }
+                target[static_cast<std::size_t>(position)] = codeBase(*base);
+                previous = position;
+            }
+            return true;
+        };
 
         std::string sequence;
         if (literal) {
@@ -982,35 +1161,181 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         } else {
             auto contigId = alignmentCursor.readVarint();
             auto targetStart = alignmentCursor.readVarint();
-            auto mismatchCount = alignmentCursor.readVarint();
-            if (!contigId || !targetStart || !mismatchCount ||
-                *contigId >= reference.contigs.size() ||
-                *targetStart > reference.contigs[*contigId].sequence.size() ||
-                *readLength > reference.contigs[*contigId].sequence.size() - *targetStart ||
-                *mismatchCount > *readLength) {
+            if (!contigId || !targetStart || *contigId >= reference.contigs.size() ||
+                *targetStart > reference.contigs[*contigId].sequence.size()) {
                 return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                                "invalid mapped read coordinates");
             }
-            sequence = reference.contigs[*contigId].sequence.substr(
-                static_cast<std::size_t>(*targetStart), static_cast<std::size_t>(*readLength));
-            std::uint64_t previous = 0;
-            for (std::uint32_t edit = 0; edit < *mismatchCount; ++edit) {
-                auto delta = alignmentCursor.readVarint();
-                auto base = alignmentCursor.readU8();
-                if (!delta || !base || *base > 4U) {
+            const auto& referenceSequence = reference.contigs[*contigId].sequence;
+
+            if (extended) {
+                auto queryStart = alignmentCursor.readVarint();
+                auto queryEnd = alignmentCursor.readVarint();
+                auto operationCount = alignmentCursor.readVarint();
+                if (!queryStart || !queryEnd || !operationCount || *queryStart >= *queryEnd ||
+                    *queryEnd > *readLength || *operationCount == 0 ||
+                    *operationCount > kMaxCigarOps) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "invalid extended mapped coordinates");
+                }
+
+                std::vector<CigarOp> operations;
+                std::vector<std::uint8_t> insertionBases;
+                std::uint64_t querySpan = 0;
+                std::uint64_t targetSpan = 0;
+                for (std::uint64_t operation = 0; operation < *operationCount; ++operation) {
+                    auto length = alignmentCursor.readVarint();
+                    auto code = alignmentCursor.readU8();
+                    if (!length || !code || *length == 0 ||
+                        *length > std::numeric_limits<std::uint32_t>::max() || *code > 2U) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "invalid CIGAR operation");
+                    }
+                    operations.push_back(
+                        {static_cast<std::uint32_t>(*length), static_cast<std::uint8_t>(*code)});
+                    if (*code == 1U) {
+                        auto inserted =
+                            alignmentCursor.readBytes(static_cast<std::size_t>(*length));
+                        if (!inserted) {
+                            return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                           "truncated insertion bases");
+                        }
+                        for (const auto base : *inserted) {
+                            if (base > 4U) {
+                                return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                               "invalid insertion base");
+                            }
+                            insertionBases.push_back(base);
+                        }
+                    }
+                    if ((*code == 0U || *code == 1U) &&
+                        !checkedAdd(querySpan, static_cast<std::size_t>(*length))) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "query span overflow");
+                    }
+                    if ((*code == 0U || *code == 2U) &&
+                        !checkedAdd(targetSpan, static_cast<std::size_t>(*length))) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "target span overflow");
+                    }
+                }
+                if (querySpan != *queryEnd - *queryStart ||
+                    *targetStart > referenceSequence.size() ||
+                    targetSpan > referenceSequence.size() - *targetStart) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "CIGAR spans disagree with coordinates");
+                }
+
+                auto leftClipLength = alignmentCursor.readVarint();
+                if (!leftClipLength || *leftClipLength != *queryStart ||
+                    *leftClipLength > alignmentCursor.remaining()) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "invalid left clip length");
+                }
+                std::string leftClip;
+                leftClip.reserve(static_cast<std::size_t>(*leftClipLength));
+                for (std::uint64_t base = 0; base < *leftClipLength; ++base) {
+                    auto code = alignmentCursor.readU8();
+                    if (!code || *code > 4U) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "invalid left clip base");
+                    }
+                    leftClip.push_back(codeBase(*code));
+                }
+                auto rightClipLength = alignmentCursor.readVarint();
+                if (!rightClipLength || *rightClipLength != *readLength - *queryEnd ||
+                    *rightClipLength > alignmentCursor.remaining()) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "invalid right clip length");
+                }
+                std::string rightClip;
+                rightClip.reserve(static_cast<std::size_t>(*rightClipLength));
+                for (std::uint64_t base = 0; base < *rightClipLength; ++base) {
+                    auto code = alignmentCursor.readU8();
+                    if (!code || *code > 4U) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "invalid right clip base");
+                    }
+                    rightClip.push_back(codeBase(*code));
+                }
+
+                std::string aligned;
+                aligned.reserve(static_cast<std::size_t>(querySpan));
+                std::size_t insertionOffset = 0;
+                std::uint64_t targetOffset = *targetStart;
+                for (const auto& operation : operations) {
+                    if (operation.code == 0U) {
+                        if (operation.length > referenceSequence.size() - targetOffset) {
+                            return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                           "CIGAR target exceeds reference");
+                        }
+                        aligned.append(referenceSequence,
+                                       static_cast<std::size_t>(targetOffset),
+                                       operation.length);
+                        targetOffset += operation.length;
+                    } else if (operation.code == 1U) {
+                        if (insertionOffset + operation.length > insertionBases.size()) {
+                            return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                           "insertion length disagrees");
+                        }
+                        for (std::uint32_t baseIndex = 0; baseIndex < operation.length;
+                             ++baseIndex) {
+                            aligned.push_back(
+                                codeBase(insertionBases[insertionOffset + baseIndex]));
+                        }
+                        insertionOffset += operation.length;
+                    } else if (operation.length > referenceSequence.size() - targetOffset) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "CIGAR target exceeds reference");
+                    } else {
+                        targetOffset += operation.length;
+                    }
+                }
+                if (insertionOffset != insertionBases.size()) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "trailing insertion bases");
+                }
+
+                auto mismatchCount = alignmentCursor.readVarint();
+                if (!mismatchCount || *mismatchCount > querySpan ||
+                    !applyMismatches(aligned, *mismatchCount, querySpan)) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "invalid extended mismatch entry");
+                }
+                if (reverse) {
+                    aligned = reverseComplement(aligned);
+                }
+                sequence = std::move(leftClip);
+                sequence += aligned;
+                sequence += rightClip;
+                if (sequence.size() != *readLength) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "extended read length disagrees");
+                }
+                if (*queryStart != 0U || *queryEnd != *readLength) {
+                    ++block.stats.clipped;
+                }
+                if (std::any_of(operations.begin(), operations.end(), [](const CigarOp& operation) {
+                        return operation.code != 0U;
+                    })) {
+                    ++block.stats.indel;
+                }
+            } else {
+                auto mismatchCount = alignmentCursor.readVarint();
+                if (!mismatchCount || *readLength > referenceSequence.size() - *targetStart ||
+                    *mismatchCount > *readLength) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "invalid mapped read coordinates");
+                }
+                sequence = referenceSequence.substr(static_cast<std::size_t>(*targetStart),
+                                                    static_cast<std::size_t>(*readLength));
+                if (!applyMismatches(sequence, *mismatchCount, *readLength)) {
                     return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                                    "invalid mismatch entry");
                 }
-                const auto position = previous + *delta;
-                if (position >= *readLength || (edit > 0 && position <= previous)) {
-                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
-                                                   "mismatch position is out of order");
+                if (reverse) {
+                    sequence = reverseComplement(sequence);
                 }
-                sequence[static_cast<std::size_t>(position)] = codeBase(*base);
-                previous = position;
-            }
-            if ((*flags & 0x02U) != 0U) {
-                sequence = reverseComplement(sequence);
             }
             ++block.stats.mapped;
         }
@@ -1185,6 +1510,8 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     stats.records += block->records.size();
     stats.mapped += block->stats.mapped;
     stats.literal += block->stats.literal;
+    stats.clipped += block->stats.clipped;
+    stats.indel += block->stats.indel;
     stats.idsBytes += block->stats.idsBytes;
     stats.qualitiesBytes += block->stats.qualitiesBytes;
     stats.alignmentsBytes += block->stats.alignmentsBytes;
@@ -1320,6 +1647,8 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
         stats.bases += bases;
         stats.mapped += written->second.mapped;
         stats.literal += written->second.literal;
+        stats.clipped += written->second.clipped;
+        stats.indel += written->second.indel;
         stats.idsBytes += written->second.idsBytes;
         stats.qualitiesBytes += written->second.qualitiesBytes;
         stats.alignmentsBytes += written->second.alignmentsBytes;

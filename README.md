@@ -140,13 +140,15 @@ RNA-Seq 分箱质量头部小 22.9%，在 WGS 分箱质量头部小 23.2%。实�
 `max-compress` / `max-decompress` / `max-verify` 在三个样本上分别得到
 5.087× / 8.165× / 7.790× raw，相对当前 v2 归档 −21.36%～−24.87%，且
 `max-verify` 与解压后 `cmp` 均通过。Phase 2 另有开发工具 `fqc_ref_archive`
-（`fqc-max-ref/v1`）：PAF sidecar + external reference + fqzcomp，在 5 Mb 合成参考 /
-3× 双端 150 bp 上 R1/R2 为 827,688 / 827,546 B，约 21.05× raw，`verify` 与 `cmp`
-通过；该数字是机制验证，不是人类 30× WGS 结论。Phase 2.1 又加入自适应 ID front
-coding：真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化
-ID 合成 R1 为 331,553 B（53.385× raw），同样是机制验证。但 `--max-ratio` 顶层开关、
-内置 mapper/BAM、伪基因组（Phase 3）与最终逐字节格式**仍未实现**；`max-compress` 与
-`fqc_ref_archive` 是显式实验入口，默认 CLI 与 `fqc-sequential/v2` 不变。
+（`fqc-max-ref/v1`）：PAF sidecar + external reference + fqzcomp，Phase 2.2 支持
+PAF `M/=/X/I/D` 与左右 clip，在 5 Mb 合成参考 / 3× 双端 150 bp 上 R1/R2 为
+792,217 / 796,633 B，约 21.993× / 21.871× raw，`verify` 与 `cmp` 通过；该数字是
+机制验证，不是人类 30× WGS 结论。Phase 2.1 的自适应 ID front coding 在真实
+WGS/NovaSeq 头部 ID 探针上约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR
+合成 R1 为 296,082 B（59.781× raw），同样是机制验证。但 `--max-ratio` 顶层开关、
+内置 mapper/BAM、S/H/N/P/长读 spliced alignment、伪基因组（Phase 3）与最终逐字节格式
+**仍未实现**；`max-compress` 与 `fqc_ref_archive` 是显式实验入口，默认 CLI 与
+`fqc-sequential/v2` 不变。
 
 ## 已知限制
 
@@ -155,6 +157,8 @@ ID 合成 R1 为 331,553 B（53.385× raw），同样是机制验证。但 `--ma
   `fqc_ref_archive`，没有 `--max-ratio` 顶层开关、内置 mapper/BAM 或伪基因组。最终
   max-ratio（参考/伪基因组、逐字节 `+` 行/行尾/空 read 保真、参考身份 SHA-256）仍是
   设计目标（[docs/max-ratio-design.md](docs/max-ratio-design.md)）。
+* 参考原型的 CIGAR 只支持 PAF `M/=/X/I/D` 与 query 范围 clip；`S/H/N/P`、长读
+  spliced alignment、BAM/CRAM 与真实 30× WGS 验收未完成。
 * 归档帧大小与压缩时的 `--memory-limit` 相关；用显著更低的预算解码高预算生成的归档
   可能失败（例如新版 16 GiB 归档在 64 MiB 下会被逐帧预算拒绝；旧版 64 MiB 归档在新版
   64 MiB 下约需 101 MiB）。格式不变，提高 `--memory-limit` 即可读取。
@@ -178,6 +182,8 @@ ID 合成 R1 为 331,553 B（53.385× raw），同样是机制验证。但 `--ma
 | Phase 2 参考格式契约 | [openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md](openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md) |
 | Phase 2.1 ID codec 实测 | [docs/max-ratio-baselines/2026-11-15-id-codec.md](docs/max-ratio-baselines/2026-11-15-id-codec.md) |
 | Phase 2.1 ID codec 契约 | [openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md](openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md) |
+| Phase 2.2 CIGAR 实测 | [docs/max-ratio-baselines/2026-11-15-ref-cigar.md](docs/max-ratio-baselines/2026-11-15-ref-cigar.md) |
+| Phase 2.2 CIGAR 契约 | [openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md](openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md) |
 | 参考压缩开发工具 | [tools/ref_archive/README.md](tools/ref_archive/README.md) |
 | Phase 0 压缩比探针（开发工具） | [tools/ratio_probe/README.md](tools/ratio_probe/README.md) |
 | 质量 codec 探针（开发工具） | [tools/quality_probe/README.md](tools/quality_probe/README.md) |

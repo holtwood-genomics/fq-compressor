@@ -153,9 +153,11 @@ minimap2 -x sr -c -t 4 ref5m.fa r2.fq > r2.paf
 | `r1.struct.paf` | 9,071,979 | `51ca888a30de942c792ffd5772fb0a4d59ea9e1339a47e8741dd6aca42488da7` |
 
 - 序列、参考、PAF 坐标、质量值不变；只把 ID 改成 Illumina 风格并同步改写 PAF 第一列。
-- 归档 331,553 B（53.385× raw，`front_id_blocks=2`），`verify` 与 `cmp` 通过。
-- 这是 ID codec 机制验证，不是真实 WGS；完整命令与边界见
-  [2026-11-15-id-codec.md](2026-11-15-id-codec.md)。
+- Phase 2.1 归档 331,553 B（53.385× raw，`front_id_blocks=2`），`verify` 与 `cmp` 通过；
+  Phase 2.2 CIGAR 后为 296,082 B（59.781× raw），`verify` 与 `cmp` 仍通过。
+- 这是 ID + CIGAR codec 机制验证，不是真实 WGS；完整命令与边界见
+  [2026-11-15-id-codec.md](2026-11-15-id-codec.md) 与
+  [2026-11-15-ref-cigar.md](2026-11-15-ref-cigar.md)。
 
 ## 6. ENA 元数据查询
 

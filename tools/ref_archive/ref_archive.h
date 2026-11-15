@@ -30,6 +30,8 @@ struct RefStats {
     std::uint64_t bases = 0;
     std::uint64_t mapped = 0;
     std::uint64_t literal = 0;
+    std::uint64_t clipped = 0;
+    std::uint64_t indel = 0;
     std::uint64_t idsBytes = 0;
     std::uint64_t qualitiesBytes = 0;
     std::uint64_t alignmentsBytes = 0;

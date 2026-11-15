@@ -2,8 +2,9 @@
 
 > 状态：**设计完成；Phase 0 探针与数据集 manifest、Phase 1 质量 codec 探针、Phase 1
 > 实验容器 `fqc-max/v1`、Phase 2 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID
-> front coding 已实现（2026-11-15）。Phase 2 只完成“PAF sidecar + external reference”
-> 的合成数据机制验证，未达真实 30× 人类 WGS 验收；Phase 3（无参伪基因组）未实现。**
+> front coding、Phase 2.2 clip/indel CIGAR 编码已实现（2026-11-15）。Phase 2 只完成
+> “PAF sidecar + external reference”的合成数据机制验证，未达真实 30× 人类 WGS 验收；
+> Phase 3（无参伪基因组）未实现。**
 > 默认 CLI、`fqc-sequential/v2` 格式与 fast 流式路径均不变；`max-compress` 与
 > `fqc_ref_archive` 是显式实验工具，不是最终 max-ratio。
 > 日期：2026-11-14；最近更新：2026-11-15
@@ -16,9 +17,11 @@
 > [Phase 1 实验容器基线](max-ratio-baselines/2026-11-15-max-container.md)、
 > [Phase 2 参考原型基线](max-ratio-baselines/2026-11-15-ref-container.md)、
 > [Phase 2.1 ID codec 基线](max-ratio-baselines/2026-11-15-id-codec.md)、
+> [Phase 2.2 CIGAR 基线](max-ratio-baselines/2026-11-15-ref-cigar.md)、
 > [Phase 1 容器契约](../openspec/changes/2026-11-15-max-ratio-phase1-container/design.md)、
 > [Phase 2 参考契约](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)、
 > [Phase 2.1 ID codec 契约](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)、
+> [Phase 2.2 CIGAR 契约](../openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md)、
 > [Phase 2 实现笔记](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md)、
 > [提案笔记](../.agents/notes/proposed/architecture/2026-11-14-max-ratio-mode.md)
 
@@ -58,10 +61,12 @@
 8. **先压缩比，后速度。** Phase 0–3 不设吞吐门禁；只有压缩比达到目标后，才讨论并行、
    SIMD、内存复用与解压吞吐。本文不把任何速度数字当作已实现结果。
 9. **Phase 2 原型已用外部 PAF 验证结构，不是产品结论。** 合成 5 Mb 参考 + wgsim 3×
-   双端数据上，R1/R2 归档分别 827,688 B / 827,546 B，相对原始 FASTQ 约 **21.05×**；
-   加入自适应 ID front coding 后，人工结构化 ID 的合成 R1 为 331,553 B（**53.385×**），
-   但这是 ID codec 机制验证，不是真实 WGS。`verify` 与解压后 `cmp` 通过；参考不计入、
-   质量恒定 Q23、只做纯 `<len>M` 比对，不能外推为人类 30× WGS 或 ORA/Genozip 等价结果。
+   双端数据上，Phase 2.2 的 R1/R2 归档分别为 792,217 B / 796,633 B，相对原始 FASTQ
+   约 **21.993× / 21.871×**；mapped 49,998/50,000，literal 2/0，clipped 51/44，
+   indel 753/745。加入自适应 ID front coding 后，人工结构化 ID 的合成 R1 为
+   296,082 B（**59.781×**），但仍是合成机制验证，不是真实 WGS。`verify` 与解压后
+   `cmp` 通过；参考不计入、质量恒定 Q23、只支持 PAF CIGAR 的 M/=/X/I/D（不支持
+   S/H/N/P），不能外推为人类 30× WGS 或 ORA/Genozip 等价结果。
 
 ## 2. 口径与证据分级
 
@@ -322,8 +327,8 @@ permutation 和顺序恢复逻辑。Phase 3 必须先量化这个 trade-off，�
 当前实验原型已实现第 0 种；其余是正式 `max-ref` 的计划：
 
 0. **`--paf` + `--reference`（已实现，`fqc_ref_archive`）**：FASTQ + external reference
-   FASTA + PAF sidecar。PAF 只用于压缩，解压只依赖 reference；当前只接受全长、纯
-   `<len>M`、无剪切的比对，其余 read 回退 literal。
+   FASTA + PAF sidecar。PAF 只用于压缩，解压只依赖 reference；当前接受 `M/=/X/I/D`
+   CIGAR 与 `queryStart/queryEnd` 表达的左右 clip，`S/H/N/P` 或坐标不一致时回退 literal。
 1. **`--bam-sidecar`（未实现）**：FASTQ + 已排序 BAM/CRAM。BAM 只作为比对 sidecar，不作为
    唯一输入；FASTQ 仍提供原始字节、顺序、`+` 行。要求 BAM 按 read name 可连接
    （name-sorted 或带索引），否则先外部排序/建索引，不静默猜顺序。
@@ -351,14 +356,14 @@ permutation 和顺序恢复逻辑。Phase 3 必须先量化这个 trade-off，�
 |---|---|---|---|
 | `PERFECT` | contig id + offset + orientation + length | 完全匹配 | 支持（作为 mismatch=0 的 mapped） |
 | `MISMATCH` | 上述 + mismatch 位置 delta + 2-bit alt | 少量替换 | 支持（`--max-mismatches` 内） |
-| `CLIPPED` | 上述 + 5'/3' clip 长度 + clip 序列（2/4 bit） | 末端不匹配/软剪切 | 不支持，回退 literal |
-| `INDEL` | 上述 + indel 位置/长度/序列 | 短 indel | 不支持，回退 literal |
-| `LITERAL` | 2-bit + 异常列表 | 未映射、低质量、复杂 indel | 支持（当前原样序列 + zstd） |
+| `CLIPPED` | 上述 + query 范围 + 左右 clip 序列（base code） | 末端不匹配/软剪切 | 支持（PAF queryStart/queryEnd） |
+| `INDEL` | 上述 + CIGAR I/D；I 存 base code，D 不存序列 | 短 indel | 支持（M/=/X/I/D） |
+| `LITERAL` | 2-bit + 异常列表 | 未映射、低质量、复杂 CIGAR | 支持（当前原样序列 + zstd） |
 
-第一版**不显式编码 indel**：Illumina 的 indel 测序错误比例很低，ORA 也选择用更多 mismatch
-或 clip 代替 indel，以换取极快 mapper。若后续数据显示 indel 收益明显，再增加 `INDEL` 类别；
-在此之前，含 indel 的 read 走 `CLIPPED` 或 `LITERAL`，仍然是无损的。当前原型只接受纯
-`<len>M`，所以 `CLIPPED`/`INDEL` 都直接走 literal；这不是最终行为。
+Phase 2.2 已把 CIGAR 显式编码落进 `fqc-max-ref/v1`：`M/=/X` 中的实际替换由参考与 read
+重新计算，`I` 存 query 多出的 base code，`D` 只消费参考；query 范围短于整条 read 时存
+原始方向左右 clip。`S/H/N/P`、空/零长度/超过 256 个操作或坐标消费量不一致时仍回退
+literal。负链先在 reverse-complement 后的 aligned query 上执行 CIGAR，解码再反向还原。
 
 ### 6.4 质量、ID、metadata
 
@@ -377,20 +382,22 @@ permutation 和顺序恢复逻辑。Phase 3 必须先量化这个 trade-off，�
 5. 逐块校验 XXH64，最后校验全局计数与滚动校验和；
 6. 任何参考缺失/摘要不符/越界都 fail closed。
 
-当前 `fqc-max-ref/v1` 原型只做第 1、2、3（无 clip/indel）、4（ID/quality，canonical
-FASTQ）、5；`+` 行/行尾/空 read 的完整保真仍待最终格式。解码不需要 PAF，只需要同一
-external reference。
+当前 `fqc-max-ref/v1` 原型做第 1、2、3（PAF M/=/X/I/D + 左右 clip）、4（ID/quality，
+canonical FASTQ）、5；`+` 行/行尾/空 read 的完整保真仍待最终格式。解码不需要 PAF，
+只需要同一 external reference。
 
 ### 6.6 目标、原型结果与代价
 
 - 目标【设计目标】：30× 人类短读 WGS，原始 FASTQ 约 235 GB 量级，归档 ≤11–12 GB
   （约 20–21× 原始、5× gzip）；最终追平 ORA/Genozip 的 5–6× gzip 量级。
 - 原型结果【本地实验】：5 Mb 随机参考 + wgsim 3× 双端 150 bp，R1 17,423,235 B →
-  827,688 B（21.050× raw），R2 → 827,546 B（21.054× raw）；mapped 49,194/49,211，
-  literal 806/789；`verify` + `cmp` 通过。详细命令/SHA/字节账见
-  [Phase 2 基线](max-ratio-baselines/2026-11-15-ref-container.md)。
+  792,217 B（21.993× raw），R2 → 796,633 B（21.871× raw）；mapped 49,998/50,000，
+  literal 2/0，clipped 51/44，indel 753/745；`verify` + `cmp` 通过。详细命令/SHA/字节账见
+  [Phase 2.2 CIGAR 基线](max-ratio-baselines/2026-11-15-ref-cigar.md)；Phase 2 旧基线见
+  [ref-container](max-ratio-baselines/2026-11-15-ref-container.md)。
 - **原型结果不是 30× 人类 WGS 结论**：参考不计入、恒定 Q23、随机参考、3× 覆盖、
-  只接受纯 `<len>M`；真实数据的 ID/质量/indel/clip/重复区域会显著改变比例。
+  只支持 PAF 的 M/=/X/I/D（不支持 S/H/N/P）；真实数据的 ID/质量/复杂 CIGAR/重复区域
+  会显著改变比例。
 - 代价：需要参考、mapper/索引、参考版本绑定；压缩与解压都比 fast 模式重。
 - 不计入归档的外部参考不能算“免费”；报告必须写“external reference, not counted”。
 
@@ -600,16 +607,19 @@ footer
 ### Phase 2：`max-ref`（PAF 原型已实现；正式验收未完成）
 
 - 已完成：开发工具 `fqc_ref_archive` + `fqc-max-ref/v1`，支持
-  `FASTQ + PAF + external reference`；mapped 正/负链、mismatch delta/alt、literal 回退；
-  quality fqzcomp/zstd 自适应；块级/全局 checksum；参考摘要/contig 表校验。
+  `FASTQ + PAF + external reference`；mapped 正/负链、mismatch delta/alt、CIGAR
+  M/=/X/I/D、左右 clip、literal 回退；quality fqzcomp/zstd 自适应；块级/全局 checksum；
+  参考摘要/contig 表校验。
 - Phase 2.1 已加入自适应 ID front coding（`idCodec=2`）：每块在 raw 与 front-coded
   两种逻辑流各自 zstd19 后取较小者；真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机
   wgsim ID 自动回退 raw。
   结构化 ID 合成归档 331,553 B（53.385× raw），但这是机制验证，不是真实 WGS 结论。
-- 原型结果：5 Mb 合成参考 + wgsim 3× 双端 150 bp，R1 827,688 B（21.050× raw），
-  R2 827,546 B（21.054× raw）；`verify` + `cmp` 通过；重复压缩 SHA 一致。
-- 未完成：内置 mapper、BAM sidecar、clip/indel、参考嵌入、SHA-256、真实 30× WGS、
-  paired-end 联合、数字 ID token/delta、原子/有界执行。
+- Phase 2.2 CIGAR：R1 827,688 → 792,217 B（21.993× raw），R2 827,546 → 796,633 B
+  （21.871× raw）；mapped 49,998/50,000，literal 2/0，clipped 51/44，indel 753/745；
+  结构化 ID R1 331,553 → 296,082 B（59.781× raw）；`verify` + `cmp` 通过，重复压缩
+  SHA 一致。
+- 未完成：内置 mapper、BAM sidecar、S/H/N/P/长读 spliced alignment、参考嵌入、SHA-256、
+  真实 30× WGS、paired-end 联合、数字 ID token/delta、原子/有界执行。
 - 目标：30× 人类短读 WGS ≥20× 原始、≥5× gzip；参考摘要/解压路径严格校验。
 - 验收：与 ORA/Genozip 同数据同口径对比（若可获得）；参考不计入/计入两套数字都报告。
 - 实现顺序调整：先用 PAF 验证结构，再决定 BAM sidecar 或内置 mapper；当前原型不承诺
@@ -691,7 +701,7 @@ fqc decompress -i archive -o restored.fastq
 cmp original.fastq restored.fastq
 ```
 
-当前 Phase 2 原型的复现命令：
+当前 Phase 2.2 原型的复现命令：
 
 ```bash
 BIN=./build/clang-debug/tools/fqc_ref_archive
@@ -703,7 +713,7 @@ cmp reads.fastq restored.fastq
 ```
 
 并对 `+` 行、CRLF、IUPAC、空 read、paired-end 分别做 fixture；不能只测“能解压”。
-Phase 2 原型当前只覆盖 canonical LF FASTQ；上述 fixture 仍是最终格式的门禁。
+Phase 2.2 原型当前只覆盖 canonical LF FASTQ；上述 fixture 仍是最终格式的门禁。
 
 ### 11.4 与外部工具对比的公平性
 
@@ -1033,9 +1043,11 @@ compression”“Genozip FASTQ reference”“PgRC2 FASTQ”“Mstcom FASTQ”�
 - Phase 2 参考原型代码/实验：**约 01:48–02:04（约 16 分钟）**；
 - Phase 2 文档、契约、最终门禁与交付复核：**02:04–02:34（约 30 分钟）**；
 - Phase 2.1 ID codec 实现、真实 ID 探针、结构化 ID 实验、契约/文档与最终门禁：
-  **02:34–03:08（约 34 分钟）**。
+  **02:34–03:08（约 34 分钟）**；
+- Phase 2.2 clip/indel CIGAR 实现、合成基准、契约/文档与门禁：
+  **2026-11-15 09:45–10:00（约 15 分钟）**。
 
-合计约 **3 小时 00 分**；前期 web 检索与方案推演没有可靠起始时间，不计入这个数字，也不把
+合计约 **3 小时 15 分**；前期 web 检索与方案推演没有可靠起始时间，不计入这个数字，也不把
 它写成精确工时。
 
 已完成：
@@ -1067,24 +1079,28 @@ compression”“Genozip FASTQ reference”“PgRC2 FASTQ”“Mstcom FASTQ”�
 - 实现 Phase 2.1 自适应 ID front coding（`idCodec=2`），真实 WGS/NovaSeq 头部 ID 探针
   约 −99%，随机 wgsim ID 回退 raw 且旧归档逐字节不变；结构化 ID 合成归档 331,553 B
   （53.385× raw），并新增对应 OpenSpec、基线和实现笔记；
-- 新增 Phase 2 / Phase 2.1 OpenSpec 契约、参考原型与 ID codec 基线、开发工具 README、
-  实现笔记，并同步更新 README/ALGORITHM/ARCHITECTURE/roadmap/development-journey/
-  CHANGELOG。
+- 实现 Phase 2.2 CIGAR 扩展：支持 PAF M/=/X/I/D 与左右 clip，纯 M 保持旧布局；
+  R1/R2 792,217/796,633 B（21.993×/21.871× raw），结构化 ID R1 296,082 B
+  （59.781× raw），新增 `clipped`/`indel` 统计、OpenSpec、基线和实现笔记；
+- 新增 Phase 2 / Phase 2.1 / Phase 2.2 OpenSpec 契约、参考原型与 ID/CIGAR 基线、
+  开发工具 README、实现笔记，并同步更新 README/ALGORITHM/ARCHITECTURE/roadmap/
+  development-journey/CHANGELOG。
 
 未完成 / 未声称：
 
-- 没有 `--max-ratio` 顶层开关、内置 mapper、BAM sidecar、参考嵌入、clip/indel、伪基因组、
-  read 重排或质量上下文编码器；Phase 3 未实现，Phase 2 只有 PAF 原型；
+- 没有 `--max-ratio` 顶层开关、内置 mapper、BAM sidecar、参考嵌入、S/H/N/P、长读
+  spliced alignment、伪基因组、read 重排或质量上下文编码器；Phase 3 未实现，Phase 2
+  只有 PAF 原型；
 - 当前 `fqc-max/v1` / `fqc-max-ref/v1` 只对 canonical LF 输入做逐字节 round-trip；
   `+` 行内容、混合行尾、空 read 的原始字节保真未实现，不能当作最终 max-ratio；
-- Phase 2 的 21× 与 Phase 2.1 的 53.385× 都是合成数据、参考不计入、恒定 Q23、纯
-  `<len>M` 比对的机制验证；53.385× 还依赖人工结构化 ID，不是人类 30× WGS 结论；
+- Phase 2.2 的 21.993×/21.871× 与结构化 ID 的 59.781× 都是合成数据、参考不计入、恒定
+  Q23、PAF CIGAR 的机制验证；59.781× 还依赖人工结构化 ID，不是人类 30× WGS 结论；
   真实 WGS 尚未验收；
 - 没有在本地复测 ORA/Genozip/SPRING/PgRC2/Mstcom/fqxv；
 - WGS `SRR14724532` 只有头部约 300k reads，完整 35× run 未下载；完整 run 的序列冗余/
   覆盖分布未验证；
-- 所有 10×/20× 数字仍是设计目标；已实现容器的 5.09×–8.17× raw、合成参考原型的
-  21.05× 与结构化 ID 的 53.385× 不是同一口径的第一梯队结论。
+- 所有 10×/20× 数字仍是设计目标；已实现容器的 5.09×–8.17× raw、合成参考原型 Phase 2.2
+  的 21.993×/21.871× 与结构化 ID 的 59.781× 不是同一口径的第一梯队结论。
 
 可追溯入口：
 
@@ -1098,6 +1114,8 @@ compression”“Genozip FASTQ reference”“PgRC2 FASTQ”“Mstcom FASTQ”�
 - Phase 2 参考基线：[docs/max-ratio-baselines/2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)；
 - Phase 2.1 ID codec 基线：[docs/max-ratio-baselines/2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-codec.md)；
 - Phase 2.1 ID codec 契约：[openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)；
+- Phase 2.2 CIGAR 基线：[docs/max-ratio-baselines/2026-11-15-ref-cigar.md](max-ratio-baselines/2026-11-15-ref-cigar.md)；
+- Phase 2.2 CIGAR 契约：[openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md)；
 - 容器实现笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase1-container.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase1-container.md)；
 - 参考原型笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md)；
 - 变更记录：[CHANGELOG.md](../CHANGELOG.md)。

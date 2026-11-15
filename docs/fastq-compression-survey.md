@@ -295,11 +295,12 @@ NovaSeq 6000、约 35×、双端 `fastq.gz`，8 线程；Genozip 使用 `--refer
    仍只覆盖 canonical LF，且未处理序列跨 read 冗余。
 4. **序列跨 read 冗余是第二杠杆**：当前 2-bit 已接近下限，只有参考/伪基因组/重排能再降。
    Phase 2 已把参考路线落成开发原型 `fqc_ref_archive`：PAF + external reference +
-   contig/offset/orientation/mismatch；合成 5 Mb 参考/3× 双端数据 R1/R2 约 21.05× raw，
-   `verify`/`cmp` 通过。但参考不计入、质量恒定、只接受纯 `<len>M`，不是人类 30× WGS 结论。
-   Phase 2.1 又验证了 ID front coding：真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机
-   wgsim ID 自动回退 raw；人工结构化 ID 合成 R1 为 331,553 B（53.385× raw），仍是
-   合成机制验证。
+   contig/offset/orientation/mismatch/CIGAR；Phase 2.2 支持 `M/=/X/I/D` 与左右 clip，
+   合成 5 Mb 参考/3× 双端数据 R1/R2 为 792,217/796,633 B（21.993×/21.871× raw），
+   mapped 49,998/50,000、literal 2/0，`verify`/`cmp` 通过。但参考不计入、质量恒定、
+   不支持 `S/H/N/P`，不是人类 30× WGS 结论。Phase 2.1 又验证了 ID front coding：真实
+   WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR
+   合成 R1 为 296,082 B（59.781× raw），仍是合成机制验证。
 5. **速度后置**：本节的 20×+ 工具大多比 fast 模式慢一个数量级以上；先追压缩比，再谈速度。
 
 ### 9.6 增补来源

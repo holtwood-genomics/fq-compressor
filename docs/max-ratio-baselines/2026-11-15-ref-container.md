@@ -1,10 +1,15 @@
 # 2026-11-15 参考压缩原型 `fqc-max-ref/v1` 实测
 
+> **历史基线说明（2026-11-15 追加）**：本文件记录 Phase 2/2.1 的纯 M 与 ID codec 结果。
+> Phase 2.2 已加入 clip/indel CIGAR，R1/R2 归档更新为 792,217 / 796,633 B；最新结论、
+> SHA 与字节账见 [2026-11-15-ref-cigar.md](2026-11-15-ref-cigar.md)。本文件数字仍保留，
+> 用于对比 Phase 2 的历史口径，不再代表当前工具输出。
+
 - 状态：Phase 2 `max-ref` 实验原型 + Phase 2.1 自适应 ID codec 扩展（**不是**最终
   max-ratio，不是产品 CLI）
 - 实现：`tools/ref_archive/`，目标 `fqc_ref_archive`
 - 参考模式：**external reference，不计入归档体积**
-- 比对 sidecar：带 `cg:Z:` 的 PAF（当前只接受纯 `<len>M`、全长、无剪切）
+- 比对 sidecar：带 `cg:Z:` 的 PAF（本文件记录 Phase 2 时只接受纯 `<len>M`、全长、无剪切；Phase 2.2 已扩展）
 - 质量 codec：htscodecs `v1.6.7` fqzcomp（每块策略 0/1 自适应，zstd19 回退）
 - 设计：[docs/max-ratio-design.md](../max-ratio-design.md)
 - ID codec 增补：[2026-11-15-id-codec.md](2026-11-15-id-codec.md)
@@ -171,8 +176,9 @@ R1 重复压缩输出逐字节一致（同一 SHA）；当前归档字节是可�
 
 - **内置 mapper**：必须外部提供 PAF；PAF 本身不计入归档，也不是解压依赖。
 - **BAM sidecar**：没有 BAM/CRAM 连接、name-sort/索引、CIGAR 解码。
-- **clip/indel**：`cg` 不是纯 `<len>M` 的 read 走 literal；因此当前 mapped 率是
-  “纯替换、全长线性比对”的 mapped 率。
+- **clip/indel**：Phase 2 时 `cg` 不是纯 `<len>M` 的 read 走 literal；因此本文件的
+  mapped 率是“纯替换、全长线性比对”的历史 mapped 率。Phase 2.2 已改为支持
+  M/=/X/I/D 与左右 clip，详见 [ref-cigar 基线](2026-11-15-ref-cigar.md)。
 - **参考嵌入**：只有 external reference；参考 FASTA 不计入归档体积。
 - **SHA-256**：原型用 XXH64；正式格式要求参考身份使用 SHA-256。
 - **数字 ID token/delta**：通用 front coding 已实现；没有数字 token、字段字典或跨块模型。

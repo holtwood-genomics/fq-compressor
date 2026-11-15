@@ -227,15 +227,17 @@ Footer 的滚动校验和把每帧的 8 字节校验和依次喂入全局 XXH64�
   [实验容器基线](docs/max-ratio-baselines/2026-11-15-max-container.md) 与
   [格式契约](openspec/changes/2026-11-15-max-ratio-phase1-container/design.md)。
 - `fqc_ref_archive` + `fqc-max-ref/v1`：外部参考 + PAF 位置/方向/mismatch +
-  fqzcomp 质量流；合成 5 Mb 参考 / 3× 双端 150 bp 上 R1/R2 约 21.05× raw，
-  `verify`/`cmp` 通过。参考不计入、恒定 Q23、只接受纯 `<len>M`，是 Phase 2 机制验证，
-  不是人类 30× WGS 结论。Phase 2.1 加入自适应 ID front coding（`idCodec=2`）：真实
-  WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID 合成 R1
-  331,553 B（53.385× raw），同样是机制验证。见
-  [参考原型基线](docs/max-ratio-baselines/2026-11-15-ref-container.md)、
+  fqzcomp 质量流；Phase 2.2 支持 PAF `M/=/X/I/D` 与左右 clip。合成 5 Mb 参考 /
+  3× 双端 150 bp 上 R1/R2 为 792,217 / 796,633 B（21.993× / 21.871× raw），
+  mapped 49,998/50,000、literal 2/0、clipped 51/44、indel 753/745；`verify`/`cmp`
+  通过。参考不计入、恒定 Q23、不支持 `S/H/N/P`，是 Phase 2 机制验证，不是人类 30×
+  WGS 结论。Phase 2.1 的自适应 ID front coding（`idCodec=2`）在真实 WGS/NovaSeq 头部
+  ID 探针上约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR 合成 R1 为
+  296,082 B（59.781× raw），同样是机制验证。见
+  [Phase 2.2 基线](docs/max-ratio-baselines/2026-11-15-ref-cigar.md)、
+  [Phase 2 基线](docs/max-ratio-baselines/2026-11-15-ref-container.md)、
   [ID codec 基线](docs/max-ratio-baselines/2026-11-15-id-codec.md)、
-  [格式契约](openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)、
-  [ID codec 契约](openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)。
+  [Phase 2.2 契约](openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md)。
 
 Phase 0 提案见
 [openspec/changes/2026-11-14-max-ratio-phase0-benchmark](openspec/changes/2026-11-14-max-ratio-phase0-benchmark/proposal.md)，

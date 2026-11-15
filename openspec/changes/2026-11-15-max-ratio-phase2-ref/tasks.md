@@ -35,8 +35,11 @@
 
 ## 5. Explicit non-goals
 
+> Phase 2.2 已用独立 change 实现 clip/indel CIGAR；本 change 的范围记录保持不变。
+> 见 `openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md`。
+
 - [ ] 5.1 内置 mapper / BAM sidecar
-- [ ] 5.2 clip/indel 编码
+- [ ] 5.2 clip/indel 编码（Phase 2.2 独立实现）
 - [ ] 5.3 参考嵌入与 SHA-256
 - [ ] 5.4 paired-end 联合
 - [ ] 5.5 真实 30× 人类 WGS 验收

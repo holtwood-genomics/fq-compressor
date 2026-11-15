@@ -135,8 +135,9 @@ A -> B -> C -> D（已完成，同步底座与多级流水线）-> E -> F -> I -
 ## 压缩比专项（2026-11 起，独立于并发课程）
 
 状态：**Phase 0 探针与数据集 manifest、Phase 1 质量 codec 探针、Phase 1 实验容器
-`fqc-max/v1`、Phase 2 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID front coding
-已完成；Phase 2 只做了 PAF + external reference 的合成机制验证，真实 30× WGS 未验收；
+`fqc-max/v1`、Phase 2 参考原型 `fqc-max-ref/v1`、Phase 2.1 自适应 ID front coding、
+Phase 2.2 clip/indel CIGAR 已完成；Phase 2 只做了 PAF + external reference 的合成机制验证，
+真实 30× WGS 未验收；
 Phase 3 未实现**。默认 CLI、
 `fqc-sequential/v2` 格式与 fast 路径不变；`max-compress` / `fqc_ref_archive` 是显式
 实验入口，不是最终 max-ratio。完整设计、证据矩阵与本地实验见 [docs/max-ratio-design.md](max-ratio-design.md)，
@@ -165,7 +166,7 @@ ID codec 实测见 [2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-co
 |---|---|---|---|
 | Phase 0 | ratio-only benchmark、数据集 SHA、流级统计 | 完成测量面：probe+HiSeq/NovaSeq/WGS 头部快照+WGS 完整 run manifest；完整 run 未下载 | 重复运行字节数稳定；口径可追溯 |
 | Phase 1 | 质量/ID/`+` 行/换行共享底座 | 质量 codec 探针与实验容器 `fqc-max/v1` 完成；`+` 行/CRLF/空 read 逐字节保真未实现 | 质量流 ≥10% 已通过（HiSeq −17.7%、NovaSeq −22.9%、WGS 头部 −23.2% vs zstd19）；实际容器相对 v2 −21.36%～−24.87%，5.087×–8.165× raw |
-| Phase 2 | `max-ref` 参考/BAM sidecar（绝对压缩比优先） | PAF + external reference 原型完成；合成 5 Mb/3× 数据 21.05× raw；自适应 ID front coding 完成，真实 WGS/NovaSeq 头部 ID 探针约 −99%；结构化 ID 合成 53.385× raw（机制验证）；BAM/内置 mapper/真实 30× WGS 未完成 | 30× 人类 WGS ≥20× raw、≥5× gzip |
+| Phase 2 | `max-ref` 参考/BAM sidecar（绝对压缩比优先） | PAF + external reference 原型完成；Phase 2.2 CIGAR 支持 M/=/X/I/D 与左右 clip，合成 5 Mb/3× 数据 21.993×/21.871× raw；自适应 ID front coding 完成，真实 WGS/NovaSeq 头部 ID 探针约 −99%；结构化 ID 合成 59.781× raw（机制验证）；BAM/内置 mapper/S/H/N/P/真实 30× WGS 未完成 | 30× 人类 WGS ≥20× raw、≥5× gzip |
 | Phase 3 | `max-ref-free` 伪基因组/原序引用（无参路线） | 未开始 | 全质量短读 ≥10× raw；分箱 NovaSeq ≥18–20× raw |
 | Phase 4 | 速度/内存优化 | 未开始 | 仅在 Phase 1–3 达标后启动 |
 

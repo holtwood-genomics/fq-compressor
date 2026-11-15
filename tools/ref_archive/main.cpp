@@ -25,7 +25,8 @@ void report(const fqc::Result<fqc::tools::ref::RefStats>& result, bool compressi
     const auto& stats = *result;
     std::cout << "blocks=" << stats.blocks << " records=" << stats.records
               << " bases=" << stats.bases << " mapped=" << stats.mapped
-              << " literal=" << stats.literal << " ids=" << stats.idsBytes
+              << " literal=" << stats.literal << " clipped=" << stats.clipped
+              << " indel=" << stats.indel << " ids=" << stats.idsBytes
               << " qualities=" << stats.qualitiesBytes << " alignments=" << stats.alignmentsBytes
               << " fqz_blocks=" << stats.fqzBlocks
               << " zstd_quality_blocks=" << stats.zstdQualityBlocks

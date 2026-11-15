@@ -16,4 +16,4 @@
 |---|---|---|
 | [0001](0001-no-heavy-parallel-framework.md) | 不引重并行框架（TBB/线程池/无锁/异步 I/O） | 已采纳 |
 | [0002](0002-sequential-format-v2.md) | 格式族 `fqc-sequential/v2` 与 Rust 实现并存 | 已采纳 |
-| [0003](0003-max-ratio-mode.md) | 最高压缩比作为独立 opt-in 模式 | 已采纳（Phase 0/1 与 Phase 2 PAF 参考原型已实现；真实 30× WGS 与 Phase 3 未实现） |
+| [0003](0003-max-ratio-mode.md) | 最高压缩比作为独立 opt-in 模式 | 已采纳（Phase 0/1 与 Phase 2/2.2 PAF 参考原型、ID codec、CIGAR 已实现；真实 30× WGS 与 Phase 3 未实现） |
