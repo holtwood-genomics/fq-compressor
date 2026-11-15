@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 
 namespace fqc::tools::ref {
 
@@ -21,12 +22,17 @@ struct RefCompressionRequest {
     std::uint64_t blockBases = 4'000'000;
     std::uint32_t maxMismatches = 16;
     bool forceOverwrite = false;
+    /// Mate FASTQ/PAF are both set for paired-end compression and both unset
+    /// for single-end compression.
+    std::optional<std::filesystem::path> mateInputPath;
+    std::optional<std::filesystem::path> matePafPath;
 };
 
 /// Counters shared by compress/decompress/verify.
 struct RefStats {
     std::uint64_t blocks = 0;
     std::uint64_t records = 0;
+    std::uint64_t pairs = 0;
     std::uint64_t bases = 0;
     std::uint64_t mapped = 0;
     std::uint64_t literal = 0;
@@ -38,6 +44,7 @@ struct RefStats {
     std::uint64_t fqzBlocks = 0;
     std::uint64_t zstdQualityBlocks = 0;
     std::uint64_t frontIdBlocks = 0;
+    std::uint64_t mateDeltas = 0;
     std::uint64_t inputBytes = 0;
     std::uint64_t outputBytes = 0;
 };
@@ -50,6 +57,13 @@ struct RefStats {
                               const std::filesystem::path& referencePath,
                               const std::filesystem::path& outputPath,
                               bool forceOverwrite = false) -> Result<RefStats>;
+
+/// Decode a paired archive into separate R1/R2 FASTQ files.
+[[nodiscard]] auto decompressPaired(const std::filesystem::path& archivePath,
+                                    const std::filesystem::path& referencePath,
+                                    const std::filesystem::path& r1OutputPath,
+                                    const std::filesystem::path& r2OutputPath,
+                                    bool forceOverwrite = false) -> Result<RefStats>;
 
 /// Decode every block and validate checksums without writing FASTQ.
 [[nodiscard]] auto verify(const std::filesystem::path& archivePath,

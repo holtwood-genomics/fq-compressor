@@ -6,8 +6,10 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <optional>
 #include <string>
 
 #include "ref_archive.h"
@@ -24,14 +26,14 @@ void report(const fqc::Result<fqc::tools::ref::RefStats>& result, bool compressi
     }
     const auto& stats = *result;
     std::cout << "blocks=" << stats.blocks << " records=" << stats.records
-              << " bases=" << stats.bases << " mapped=" << stats.mapped
+              << " pairs=" << stats.pairs << " bases=" << stats.bases << " mapped=" << stats.mapped
               << " literal=" << stats.literal << " clipped=" << stats.clipped
               << " indel=" << stats.indel << " ids=" << stats.idsBytes
               << " qualities=" << stats.qualitiesBytes << " alignments=" << stats.alignmentsBytes
               << " fqz_blocks=" << stats.fqzBlocks
               << " zstd_quality_blocks=" << stats.zstdQualityBlocks
-              << " front_id_blocks=" << stats.frontIdBlocks << " input=" << stats.inputBytes
-              << " output=" << stats.outputBytes;
+              << " front_id_blocks=" << stats.frontIdBlocks << " mate_deltas=" << stats.mateDeltas
+              << " input=" << stats.inputBytes << " output=" << stats.outputBytes;
     if (stats.outputBytes != 0 && stats.inputBytes != 0) {
         const auto numerator = compressing ? stats.inputBytes : stats.outputBytes;
         const auto denominator = compressing ? stats.outputBytes : stats.inputBytes;
@@ -50,8 +52,12 @@ auto main(int argc, char* argv[]) -> int {
 
     std::string input;
     std::string paf;
+    std::string mateInput;
+    std::string matePaf;
     std::string reference;
     std::string output;
+    std::string r1Output;
+    std::string r2Output;
     std::uint64_t blockBases = 4'000'000;
     std::uint32_t maxMismatches = 16;
     bool force = false;
@@ -60,6 +66,8 @@ auto main(int argc, char* argv[]) -> int {
         app.add_subcommand("compress", "Compress FASTQ with a PAF sidecar and reference");
     compressCommand->add_option("-i,--input", input, "Input FASTQ")->required();
     compressCommand->add_option("--paf", paf, "PAF alignment sidecar")->required();
+    compressCommand->add_option("--mate", mateInput, "Mate FASTQ for paired compression");
+    compressCommand->add_option("--mate-paf", matePaf, "Mate PAF alignment sidecar");
     compressCommand->add_option("-r,--reference", reference, "External reference FASTA")
         ->required();
     compressCommand->add_option("-o,--output", output, "Output fqc-max-ref/v1 archive")->required();
@@ -79,6 +87,15 @@ auto main(int argc, char* argv[]) -> int {
     decompressCommand->add_option("-o,--output", output, "Output FASTQ")->required();
     decompressCommand->add_flag("-f,--force", force, "Overwrite an existing output");
 
+    auto* decompressPairedCommand =
+        app.add_subcommand("decompress-paired", "Decompress a paired archive into R1/R2 FASTQ");
+    decompressPairedCommand->add_option("-i,--input", input, "Input archive")->required();
+    decompressPairedCommand->add_option("-r,--reference", reference, "External reference FASTA")
+        ->required();
+    decompressPairedCommand->add_option("--r1", r1Output, "Output R1 FASTQ")->required();
+    decompressPairedCommand->add_option("--r2", r2Output, "Output R2 FASTQ")->required();
+    decompressPairedCommand->add_flag("-f,--force", force, "Overwrite existing outputs");
+
     auto* verifyCommand = app.add_subcommand("verify", "Verify an fqc-max-ref/v1 archive");
     verifyCommand->add_option("-i,--input", input, "Input archive")->required();
     verifyCommand->add_option("-r,--reference", reference, "External reference FASTA")->required();
@@ -96,10 +113,19 @@ auto main(int argc, char* argv[]) -> int {
                                           .outputPath = output,
                                           .blockBases = blockBases,
                                           .maxMismatches = maxMismatches,
-                                          .forceOverwrite = force}),
+                                          .forceOverwrite = force,
+                                          .mateInputPath = mateInput.empty()
+                                              ? std::nullopt
+                                              : std::optional<std::filesystem::path>(mateInput),
+                                          .matePafPath = matePaf.empty()
+                                              ? std::nullopt
+                                              : std::optional<std::filesystem::path>(matePaf)}),
                true);
     } else if (*decompressCommand) {
         report(fqc::tools::ref::decompress(input, reference, output, force), false);
+    } else if (*decompressPairedCommand) {
+        report(fqc::tools::ref::decompressPaired(input, reference, r1Output, r2Output, force),
+               false);
     } else if (*verifyCommand) {
         report(fqc::tools::ref::verify(input, reference), false);
     }

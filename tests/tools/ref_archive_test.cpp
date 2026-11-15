@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <system_error>
 
@@ -80,6 +81,86 @@ struct Fixture {
     std::string paf;
 };
 
+struct PairedFixture {
+    std::string reference;
+    std::string r1Fastq;
+    std::string r2Fastq;
+    std::string interleavedFastq;
+    std::string r1Paf;
+    std::string r2Paf;
+};
+
+[[nodiscard]] auto makePairedFixture() -> PairedFixture {
+    const auto reference = referenceSequence();
+    const std::string quality(20, 'I');
+    PairedFixture fixture;
+    fixture.reference = reference;
+
+    const auto addRead = [&](std::string& fastq,
+                             std::string_view id,
+                             std::string_view comment,
+                             std::string_view sequence) {
+        fastq += '@';
+        fastq += id;
+        if (!comment.empty()) {
+            fastq += ' ';
+            fastq += comment;
+        }
+        fastq += '\n';
+        fastq += sequence;
+        fastq += "\n+\n";
+        fastq += quality;
+        fastq += '\n';
+    };
+    const auto addPaf = [](std::string& paf,
+                           std::string_view id,
+                           char strand,
+                           std::uint64_t targetStart,
+                           std::string_view cigar) {
+        paf += id;
+        paf += "\t20\t0\t20\t";
+        paf += strand;
+        paf += "\tchr1\t200\t" + std::to_string(targetStart) + "\t" +
+            std::to_string(targetStart + 20) + "\t20\t20\t60\ttp:A:P\tNM:i:0\tcg:Z:";
+        paf += cigar;
+        paf += '\n';
+    };
+
+    addRead(fixture.r1Fastq, "pair1", "1/1", reference.substr(0, 20));
+    addRead(fixture.r2Fastq, "pair1", "2/2", reference.substr(10, 20));
+    addPaf(fixture.r1Paf, "pair1", '+', 0, "20M");
+    addPaf(fixture.r2Paf, "pair1", '+', 10, "20M");
+
+    addRead(fixture.r1Fastq, "pair2", "1/1", reference.substr(40, 20));
+    addRead(fixture.r2Fastq,
+            "pair2",
+            "2/2",
+            reverseComplement(std::string_view(reference).substr(60, 20)));
+    addPaf(fixture.r1Paf, "pair2", '+', 40, "20M");
+    addPaf(fixture.r2Paf, "pair2", '-', 60, "20M");
+
+    addRead(fixture.r1Fastq, "pair3", "1/1", "NNNNACGTACGTACGTACGT");
+    addRead(fixture.r2Fastq, "pair3", "2/2", reference.substr(100, 20));
+    addPaf(fixture.r2Paf, "pair3", '+', 100, "20M");
+
+    const auto appendInterleaved = [&](std::string_view id,
+                                       std::string_view r1Comment,
+                                       std::string_view r1Sequence,
+                                       std::string_view r2Comment,
+                                       std::string_view r2Sequence) {
+        addRead(fixture.interleavedFastq, id, r1Comment, r1Sequence);
+        addRead(fixture.interleavedFastq, id, r2Comment, r2Sequence);
+    };
+    appendInterleaved("pair1", "1/1", reference.substr(0, 20), "2/2", reference.substr(10, 20));
+    appendInterleaved("pair2",
+                      "1/1",
+                      reference.substr(40, 20),
+                      "2/2",
+                      reverseComplement(std::string_view(reference).substr(60, 20)));
+    appendInterleaved("pair3", "1/1", "NNNNACGTACGTACGTACGT", "2/2", reference.substr(100, 20));
+    return fixture;
+}
+
 [[nodiscard]] auto makeFixture() -> Fixture {
     const auto reference = referenceSequence();
     const std::string quality(20, 'I');
@@ -141,7 +222,9 @@ TEST(RefArchiveTest, RoundTripsMappedAndLiteralReads) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
     EXPECT_EQ(compressed->records, 5U);
     EXPECT_EQ(compressed->mapped, 3U);
@@ -181,7 +264,9 @@ TEST(RefArchiveTest, NormalizesSoftMaskedReferenceCase) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
     EXPECT_EQ(compressed->mapped, 3U);
     EXPECT_EQ(compressed->literal, 2U);
@@ -212,7 +297,9 @@ TEST(RefArchiveTest, RejectsReferenceDigestMismatch) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
 
     auto changed = fixture.reference;
@@ -240,7 +327,9 @@ TEST(RefArchiveTest, RejectsTruncatedArchive) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
 
     const auto size = std::filesystem::file_size(archivePath);
@@ -269,7 +358,9 @@ TEST(RefArchiveTest, CompressesMultipleBlocksAndHonorsMismatchLimit) {
                                       .outputPath = archivePath,
                                       .blockBases = 20,
                                       .maxMismatches = 0,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
     EXPECT_EQ(compressed->blocks, 5U);
     EXPECT_EQ(compressed->mapped, 2U);
@@ -304,7 +395,9 @@ TEST(RefArchiveTest, SupportsEmptyArchive) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
     EXPECT_EQ(compressed->blocks, 0U);
     EXPECT_EQ(compressed->records, 0U);
@@ -336,7 +429,9 @@ TEST(RefArchiveTest, RejectsTrailingBytesAfterFooter) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
 
     {
@@ -379,7 +474,9 @@ TEST(RefArchiveTest, UsesFrontCodingForStructuredIds) {
                                       .outputPath = archivePath,
                                       .blockBases = 1'000'000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
     EXPECT_EQ(compressed->blocks, 1U);
     EXPECT_EQ(compressed->records, 2000U);
@@ -490,7 +587,9 @@ TEST(RefArchiveTest, RoundTripsClippedAndIndelReads) {
                                       .outputPath = archivePath,
                                       .blockBases = 1000,
                                       .maxMismatches = 8,
-                                      .forceOverwrite = true});
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
     ASSERT_TRUE(compressed) << compressed.error().message;
     EXPECT_EQ(compressed->records, 6U);
     EXPECT_EQ(compressed->mapped, 6U);
@@ -507,6 +606,149 @@ TEST(RefArchiveTest, RoundTripsClippedAndIndelReads) {
     const auto decompressed = decompress(archivePath, referencePath, restoredPath);
     ASSERT_TRUE(decompressed) << decompressed.error().message;
     EXPECT_EQ(readFile(restoredPath), fastq);
+}
+
+TEST(RefArchiveTest, RoundTripsPairedReadsAndSplitsMates) {
+    auto dir = makeTempDir();
+    const auto fixture = makePairedFixture();
+    const auto referencePath = dir.path / "reference.fa";
+    const auto r1Path = dir.path / "r1.fastq";
+    const auto r2Path = dir.path / "r2.fastq";
+    const auto r1PafPath = dir.path / "r1.paf";
+    const auto r2PafPath = dir.path / "r2.paf";
+    const auto archivePath = dir.path / "paired.fqmr";
+    const auto r1RestoredPath = dir.path / "r1.restored.fastq";
+    const auto r2RestoredPath = dir.path / "r2.restored.fastq";
+    const auto interleavedPath = dir.path / "interleaved.restored.fastq";
+
+    writeFile(referencePath, ">chr1\n" + fixture.reference + "\n");
+    writeFile(r1Path, fixture.r1Fastq);
+    writeFile(r2Path, fixture.r2Fastq);
+    writeFile(r1PafPath, fixture.r1Paf);
+    writeFile(r2PafPath, fixture.r2Paf);
+
+    const auto compressed = compress({.inputPath = r1Path,
+                                      .pafPath = r1PafPath,
+                                      .referencePath = referencePath,
+                                      .outputPath = archivePath,
+                                      .blockBases = 1000,
+                                      .maxMismatches = 8,
+                                      .forceOverwrite = true,
+                                      .mateInputPath = r2Path,
+                                      .matePafPath = r2PafPath});
+    ASSERT_TRUE(compressed) << compressed.error().message;
+    EXPECT_EQ(compressed->records, 6U);
+    EXPECT_EQ(compressed->pairs, 3U);
+    EXPECT_EQ(compressed->mapped, 5U);
+    EXPECT_EQ(compressed->literal, 1U);
+    EXPECT_EQ(compressed->mateDeltas, 2U);
+
+    const auto verified = verify(archivePath, referencePath);
+    ASSERT_TRUE(verified) << verified.error().message;
+    EXPECT_EQ(verified->records, 6U);
+    EXPECT_EQ(verified->pairs, 3U);
+    EXPECT_EQ(verified->mapped, 5U);
+    EXPECT_EQ(verified->literal, 1U);
+    EXPECT_EQ(verified->mateDeltas, 2U);
+
+    const auto split =
+        decompressPaired(archivePath, referencePath, r1RestoredPath, r2RestoredPath, true);
+    ASSERT_TRUE(split) << split.error().message;
+    EXPECT_EQ(readFile(r1RestoredPath), fixture.r1Fastq);
+    EXPECT_EQ(readFile(r2RestoredPath), fixture.r2Fastq);
+
+    const auto interleaved = decompress(archivePath, referencePath, interleavedPath, true);
+    ASSERT_TRUE(interleaved) << interleaved.error().message;
+    EXPECT_EQ(readFile(interleavedPath), fixture.interleavedFastq);
+}
+
+TEST(RefArchiveTest, RejectsMismatchedPairedIds) {
+    auto dir = makeTempDir();
+    const auto fixture = makePairedFixture();
+    const auto referencePath = dir.path / "reference.fa";
+    const auto r1Path = dir.path / "r1.fastq";
+    const auto r2Path = dir.path / "r2.fastq";
+    const auto r1PafPath = dir.path / "r1.paf";
+    const auto r2PafPath = dir.path / "r2.paf";
+    const auto archivePath = dir.path / "paired.fqmr";
+
+    auto mismatchedR2 = fixture.r2Fastq;
+    const auto idPosition = mismatchedR2.find("pair1");
+    ASSERT_NE(idPosition, std::string::npos);
+    mismatchedR2.replace(idPosition, 5, "other");
+
+    writeFile(referencePath, ">chr1\n" + fixture.reference + "\n");
+    writeFile(r1Path, fixture.r1Fastq);
+    writeFile(r2Path, mismatchedR2);
+    writeFile(r1PafPath, fixture.r1Paf);
+    writeFile(r2PafPath, fixture.r2Paf);
+
+    const auto compressed = compress({.inputPath = r1Path,
+                                      .pafPath = r1PafPath,
+                                      .referencePath = referencePath,
+                                      .outputPath = archivePath,
+                                      .blockBases = 1000,
+                                      .maxMismatches = 8,
+                                      .forceOverwrite = true,
+                                      .mateInputPath = r2Path,
+                                      .matePafPath = r2PafPath});
+    ASSERT_FALSE(compressed);
+    EXPECT_EQ(compressed.error().code, ErrorCode::kFormatError);
+}
+
+TEST(RefArchiveTest, RejectsIncompletePairedRequest) {
+    auto dir = makeTempDir();
+    const auto fixture = makeFixture();
+    const auto referencePath = dir.path / "reference.fa";
+    const auto inputPath = dir.path / "input.fastq";
+    const auto pafPath = dir.path / "input.paf";
+    const auto matePath = dir.path / "mate.fastq";
+    const auto archivePath = dir.path / "output.fqmr";
+
+    writeFile(referencePath, ">chr1\n" + fixture.reference + "\n");
+    writeFile(inputPath, fixture.fastq);
+    writeFile(pafPath, fixture.paf);
+    writeFile(matePath, fixture.fastq);
+
+    const auto compressed = compress({.inputPath = inputPath,
+                                      .pafPath = pafPath,
+                                      .referencePath = referencePath,
+                                      .outputPath = archivePath,
+                                      .blockBases = 1000,
+                                      .maxMismatches = 8,
+                                      .forceOverwrite = true,
+                                      .mateInputPath = matePath,
+                                      .matePafPath = std::nullopt});
+    ASSERT_FALSE(compressed);
+    EXPECT_EQ(compressed.error().code, ErrorCode::kUsageError);
+}
+
+TEST(RefArchiveTest, RejectsPairedDecompressionOfSingleEndArchive) {
+    auto dir = makeTempDir();
+    const auto fixture = makeFixture();
+    const auto referencePath = dir.path / "reference.fa";
+    const auto inputPath = dir.path / "input.fastq";
+    const auto pafPath = dir.path / "input.paf";
+    const auto archivePath = dir.path / "output.fqmr";
+
+    writeFile(referencePath, ">chr1\n" + fixture.reference + "\n");
+    writeFile(inputPath, fixture.fastq);
+    writeFile(pafPath, fixture.paf);
+    const auto compressed = compress({.inputPath = inputPath,
+                                      .pafPath = pafPath,
+                                      .referencePath = referencePath,
+                                      .outputPath = archivePath,
+                                      .blockBases = 1000,
+                                      .maxMismatches = 8,
+                                      .forceOverwrite = true,
+                                      .mateInputPath = std::nullopt,
+                                      .matePafPath = std::nullopt});
+    ASSERT_TRUE(compressed) << compressed.error().message;
+
+    const auto split = decompressPaired(
+        archivePath, referencePath, dir.path / "r1.fastq", dir.path / "r2.fastq", true);
+    ASSERT_FALSE(split);
+    EXPECT_EQ(split.error().code, ErrorCode::kUsageError);
 }
 
 TEST(RefArchiveTest, RejectsOutputPathAliasingInputOrReference) {
@@ -526,7 +768,9 @@ TEST(RefArchiveTest, RejectsOutputPathAliasingInputOrReference) {
                                               .outputPath = referencePath,
                                               .blockBases = 1000,
                                               .maxMismatches = 8,
-                                              .forceOverwrite = true});
+                                              .forceOverwrite = true,
+                                              .mateInputPath = std::nullopt,
+                                              .matePafPath = std::nullopt});
     ASSERT_FALSE(overwriteReference);
     EXPECT_EQ(overwriteReference.error().code, ErrorCode::kUsageError);
 
@@ -536,7 +780,9 @@ TEST(RefArchiveTest, RejectsOutputPathAliasingInputOrReference) {
                                           .outputPath = inputPath,
                                           .blockBases = 1000,
                                           .maxMismatches = 8,
-                                          .forceOverwrite = true});
+                                          .forceOverwrite = true,
+                                          .mateInputPath = std::nullopt,
+                                          .matePafPath = std::nullopt});
     ASSERT_FALSE(overwriteInput);
     EXPECT_EQ(overwriteInput.error().code, ErrorCode::kUsageError);
 }

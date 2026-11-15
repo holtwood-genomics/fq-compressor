@@ -50,6 +50,9 @@ constexpr std::uint8_t kReadFlagMapped = 0x01;
 constexpr std::uint8_t kReadFlagReverse = 0x02;
 constexpr std::uint8_t kReadFlagLiteral = 0x04;
 constexpr std::uint8_t kReadFlagExtended = 0x08;
+constexpr std::uint8_t kReadFlagMateDelta = 0x10;
+constexpr std::uint8_t kReadFlagMask = 0x1F;
+constexpr std::uint32_t kGlobalFlagPaired = 0x01;
 constexpr std::size_t kMaxCigarOps = 256;
 
 struct Contig {
@@ -68,6 +71,7 @@ struct GlobalHeader {
     std::vector<std::pair<std::string, std::uint64_t>> contigs;
     std::uint64_t referenceBases = 0;
     std::uint64_t digest = 0;
+    bool paired = false;
 };
 
 struct CigarOp {
@@ -115,6 +119,7 @@ struct BlockStats {
     std::uint64_t fqzBlocks = 0;
     std::uint64_t zstdQualityBlocks = 0;
     std::uint64_t frontIdBlocks = 0;
+    std::uint64_t mateDeltas = 0;
 };
 
 struct DecodedBlock {
@@ -368,6 +373,46 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         return std::nullopt;
     }
     return value;
+}
+
+[[nodiscard]] auto stripMateSuffix(std::string_view id) noexcept -> std::string_view {
+    if (id.size() >= 2 && id[id.size() - 2] == '/' && (id.back() == '1' || id.back() == '2')) {
+        return id.substr(0, id.size() - 2);
+    }
+    return id;
+}
+
+[[nodiscard]] auto pairIdsMatch(std::string_view first, std::string_view second) noexcept -> bool {
+    return first == second || stripMateSuffix(first) == stripMateSuffix(second);
+}
+
+[[nodiscard]] auto zigzagEncode(std::int64_t value) noexcept -> std::uint64_t {
+    if (value >= 0) {
+        return static_cast<std::uint64_t>(value) * 2U;
+    }
+    return static_cast<std::uint64_t>(-(value + 1)) * 2U + 1U;
+}
+
+// targetStart 是 uint64；delta 在落盘时必须能用 int64 表示。正常参考长度远小于
+// INT64_MAX，但格式边界不能依赖输入文件的现实大小。
+[[nodiscard]] auto targetStartDelta(std::uint64_t current, std::uint64_t previous) noexcept
+    -> std::optional<std::int64_t> {
+    constexpr auto kInt64MinMagnitude = std::uint64_t{1} << 63U;
+    if (current >= previous) {
+        const auto magnitude = current - previous;
+        if (magnitude > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max())) {
+            return std::nullopt;
+        }
+        return static_cast<std::int64_t>(magnitude);
+    }
+    const auto magnitude = previous - current;
+    if (magnitude > kInt64MinMagnitude) {
+        return std::nullopt;
+    }
+    if (magnitude == kInt64MinMagnitude) {
+        return std::numeric_limits<std::int64_t>::min();
+    }
+    return -static_cast<std::int64_t>(magnitude);
 }
 
 [[nodiscard]] auto loadPaf(const std::filesystem::path& path)
@@ -690,24 +735,23 @@ void appendVarint(Bytes& output, std::uint64_t value) {
 
 [[nodiscard]] auto encodeRead(const ReadRecord& record,
                               const Reference& reference,
-                              const std::unordered_map<std::string, PafAlignment>& alignments,
+                              const PafAlignment* alignment,
                               std::uint32_t maxMismatches) -> EncodedRead {
     EncodedRead encoded;
     encoded.readLen = record.sequence.size();
     encoded.literal = record.sequence;
 
-    const auto found = alignments.find(record.id);
-    if (found == alignments.end()) {
+    if (alignment == nullptr) {
         return encoded;
     }
-    const auto& alignment = found->second;
-    if (alignment.queryLength != record.sequence.size() ||
-        alignment.queryStart >= alignment.queryEnd || alignment.queryEnd > alignment.queryLength ||
-        alignment.targetStart >= alignment.targetEnd) {
+    if (alignment->queryLength != record.sequence.size() ||
+        alignment->queryStart >= alignment->queryEnd ||
+        alignment->queryEnd > alignment->queryLength ||
+        alignment->targetStart >= alignment->targetEnd) {
         return encoded;
     }
 
-    auto cigar = parseCigar(alignment.cigar);
+    auto cigar = parseCigar(alignment->cigar);
     if (!cigar) {
         return encoded;
     }
@@ -721,28 +765,28 @@ void appendVarint(Bytes& output, std::uint64_t value) {
             targetSpan += op.length;
         }
     }
-    if (querySpan != alignment.queryEnd - alignment.queryStart ||
-        targetSpan != alignment.targetEnd - alignment.targetStart) {
+    if (querySpan != alignment->queryEnd - alignment->queryStart ||
+        targetSpan != alignment->targetEnd - alignment->targetStart) {
         return encoded;
     }
 
-    const auto contig = reference.index.find(alignment.target);
+    const auto contig = reference.index.find(alignment->target);
     if (contig == reference.index.end()) {
         return encoded;
     }
     const auto& sequence = reference.contigs[contig->second].sequence;
-    if (alignment.targetEnd > sequence.size() ||
+    if (alignment->targetEnd > sequence.size() ||
         !std::all_of(record.sequence.begin(), record.sequence.end(), isAcgtn)) {
         return encoded;
     }
 
-    const auto originalMiddle =
-        record.sequence.substr(static_cast<std::size_t>(alignment.queryStart),
-                               static_cast<std::size_t>(alignment.queryEnd - alignment.queryStart));
+    const auto originalMiddle = record.sequence.substr(
+        static_cast<std::size_t>(alignment->queryStart),
+        static_cast<std::size_t>(alignment->queryEnd - alignment->queryStart));
     const auto orientedMiddle =
-        alignment.strand == '-' ? reverseComplement(originalMiddle) : originalMiddle;
+        alignment->strand == '-' ? reverseComplement(originalMiddle) : originalMiddle;
     const auto referenceSlice = std::string_view(sequence).substr(
-        static_cast<std::size_t>(alignment.targetStart), static_cast<std::size_t>(targetSpan));
+        static_cast<std::size_t>(alignment->targetStart), static_cast<std::size_t>(targetSpan));
 
     std::uint64_t queryOffset = 0;
     std::uint64_t targetOffset = 0;
@@ -783,91 +827,121 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     }
 
     encoded.flags = kReadFlagMapped;
-    if (alignment.strand == '-') {
+    if (alignment->strand == '-') {
         encoded.flags |= kReadFlagReverse;
     }
     encoded.contigId = contig->second;
-    encoded.targetStart = alignment.targetStart;
-    encoded.queryStart = alignment.queryStart;
-    encoded.queryEnd = alignment.queryEnd;
+    encoded.targetStart = alignment->targetStart;
+    encoded.queryStart = alignment->queryStart;
+    encoded.queryEnd = alignment->queryEnd;
     encoded.mismatches = mismatches;
     encoded.edits = std::move(edits);
     encoded.literal.clear();
 
-    const bool simple = alignment.queryStart == 0 && alignment.queryEnd == record.sequence.size() &&
-        querySpan == record.sequence.size() && targetSpan == record.sequence.size() &&
-        cigar->size() == 1 && (*cigar)[0].code == 0;
+    const bool simple = alignment->queryStart == 0 &&
+        alignment->queryEnd == record.sequence.size() && querySpan == record.sequence.size() &&
+        targetSpan == record.sequence.size() && cigar->size() == 1 && (*cigar)[0].code == 0;
     if (!simple) {
         encoded.flags |= kReadFlagExtended;
         encoded.cigar = std::move(*cigar);
         encoded.insertionBases = std::move(insertionBases);
         encoded.leftClip =
-            record.sequence.substr(0, static_cast<std::size_t>(alignment.queryStart));
-        encoded.rightClip = record.sequence.substr(static_cast<std::size_t>(alignment.queryEnd));
+            record.sequence.substr(0, static_cast<std::size_t>(alignment->queryStart));
+        encoded.rightClip = record.sequence.substr(static_cast<std::size_t>(alignment->queryEnd));
     }
     return encoded;
+}
+
+void writeEncodedRead(Bytes& output,
+                      const EncodedRead& encoded,
+                      const EncodedRead* mate,
+                      BlockStats& stats) {
+    std::optional<std::int64_t> mateDelta;
+    if (mate != nullptr && (encoded.flags & kReadFlagMapped) != 0U &&
+        (mate->flags & kReadFlagMapped) != 0U && encoded.contigId == mate->contigId) {
+        mateDelta = targetStartDelta(encoded.targetStart, mate->targetStart);
+    }
+    const auto flags = static_cast<std::uint8_t>(encoded.flags |
+                                                 (mateDelta.has_value() ? kReadFlagMateDelta : 0U));
+    appendU8(output, flags);
+    appendVarint(output, encoded.readLen);
+    if ((encoded.flags & kReadFlagMapped) != 0U) {
+        ++stats.mapped;
+        if (mateDelta.has_value()) {
+            ++stats.mateDeltas;
+            appendVarint(output, zigzagEncode(*mateDelta));
+        } else {
+            appendVarint(output, encoded.contigId);
+            appendVarint(output, encoded.targetStart);
+        }
+        if ((encoded.flags & kReadFlagExtended) != 0U) {
+            if (encoded.queryStart != 0U || encoded.queryEnd != encoded.readLen) {
+                ++stats.clipped;
+            }
+            const bool hasIndel = std::any_of(encoded.cigar.begin(),
+                                              encoded.cigar.end(),
+                                              [](const CigarOp& op) { return op.code != 0U; });
+            if (hasIndel) {
+                ++stats.indel;
+            }
+            appendVarint(output, encoded.queryStart);
+            appendVarint(output, encoded.queryEnd);
+            appendVarint(output, encoded.cigar.size());
+            std::size_t insertionOffset = 0;
+            for (const auto& op : encoded.cigar) {
+                appendVarint(output, op.length);
+                appendU8(output, op.code);
+                if (op.code == 1U) {
+                    for (std::uint32_t i = 0; i < op.length; ++i) {
+                        appendU8(output, encoded.insertionBases[insertionOffset + i]);
+                    }
+                    insertionOffset += op.length;
+                }
+            }
+            appendVarint(output, encoded.leftClip.size());
+            for (const auto base : encoded.leftClip) {
+                appendU8(output, baseCode(base));
+            }
+            appendVarint(output, encoded.rightClip.size());
+            for (const auto base : encoded.rightClip) {
+                appendU8(output, baseCode(base));
+            }
+        }
+        appendVarint(output, encoded.mismatches);
+        for (const auto& [delta, base] : encoded.edits) {
+            appendVarint(output, delta);
+            appendU8(output, base);
+        }
+    } else {
+        ++stats.literal;
+        output.insert(output.end(), encoded.literal.begin(), encoded.literal.end());
+    }
 }
 
 [[nodiscard]] auto encodeBlock(std::span<const ReadRecord> records,
                                const Reference& reference,
                                const std::unordered_map<std::string, PafAlignment>& alignments,
+                               const std::unordered_map<std::string, PafAlignment>& mateAlignments,
+                               bool paired,
                                std::uint32_t maxMismatches) -> std::pair<Bytes, BlockStats> {
     Bytes alignmentsRaw;
     BlockStats stats;
-    for (const auto& record : records) {
-        const auto encoded = encodeRead(record, reference, alignments, maxMismatches);
-        appendU8(alignmentsRaw, encoded.flags);
-        appendVarint(alignmentsRaw, encoded.readLen);
-        if ((encoded.flags & kReadFlagMapped) != 0U) {
-            ++stats.mapped;
-            appendVarint(alignmentsRaw, encoded.contigId);
-            appendVarint(alignmentsRaw, encoded.targetStart);
-            if ((encoded.flags & kReadFlagExtended) != 0U) {
-                if (encoded.queryStart != 0 || encoded.queryEnd != encoded.readLen) {
-                    ++stats.clipped;
-                }
-                bool hasIndel = false;
-                for (const auto& op : encoded.cigar) {
-                    if (op.code != 0) {
-                        hasIndel = true;
-                        break;
-                    }
-                }
-                if (hasIndel) {
-                    ++stats.indel;
-                }
-                appendVarint(alignmentsRaw, encoded.queryStart);
-                appendVarint(alignmentsRaw, encoded.queryEnd);
-                appendVarint(alignmentsRaw, encoded.cigar.size());
-                std::size_t insertionOffset = 0;
-                for (const auto& op : encoded.cigar) {
-                    appendVarint(alignmentsRaw, op.length);
-                    appendU8(alignmentsRaw, op.code);
-                    if (op.code == 1) {
-                        for (std::uint32_t i = 0; i < op.length; ++i) {
-                            appendU8(alignmentsRaw, encoded.insertionBases[insertionOffset + i]);
-                        }
-                        insertionOffset += op.length;
-                    }
-                }
-                appendVarint(alignmentsRaw, encoded.leftClip.size());
-                for (const auto base : encoded.leftClip) {
-                    appendU8(alignmentsRaw, baseCode(base));
-                }
-                appendVarint(alignmentsRaw, encoded.rightClip.size());
-                for (const auto base : encoded.rightClip) {
-                    appendU8(alignmentsRaw, baseCode(base));
-                }
+    std::optional<EncodedRead> previous;
+    for (std::size_t index = 0; index < records.size(); ++index) {
+        const auto& record = records[index];
+        const bool secondMate = paired && (index % 2U) != 0U;
+        const auto& selected = secondMate ? mateAlignments : alignments;
+        const auto found = selected.find(record.id);
+        auto encoded = encodeRead(
+            record, reference, found == selected.end() ? nullptr : &found->second, maxMismatches);
+        const EncodedRead* mate = secondMate && previous.has_value() ? &*previous : nullptr;
+        writeEncodedRead(alignmentsRaw, encoded, mate, stats);
+        if (paired) {
+            if (secondMate) {
+                previous.reset();
+            } else {
+                previous = std::move(encoded);
             }
-            appendVarint(alignmentsRaw, encoded.mismatches);
-            for (const auto& [delta, base] : encoded.edits) {
-                appendVarint(alignmentsRaw, delta);
-                appendU8(alignmentsRaw, base);
-            }
-        } else {
-            ++stats.literal;
-            alignmentsRaw.insert(
-                alignmentsRaw.end(), encoded.literal.begin(), encoded.literal.end());
         }
     }
     return {std::move(alignmentsRaw), stats};
@@ -887,7 +961,8 @@ void appendVarint(Bytes& output, std::uint64_t value) {
 }
 
 [[nodiscard]] auto writeGlobalHeader(std::ostream& output,
-                                     const Reference& reference) -> VoidResult {
+                                     const Reference& reference,
+                                     bool paired) -> VoidResult {
     Bytes table;
     for (const auto& contig : reference.contigs) {
         appendVarint(table, contig.name.size());
@@ -905,7 +980,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     header.insert(header.end(), kMagic.begin(), kMagic.end());
     appendU16(header, kVersion);
     appendU16(header, static_cast<std::uint16_t>(kGlobalHeaderSize + table.size()));
-    appendU32(header, 0);
+    appendU32(header, paired ? kGlobalFlagPaired : 0U);
     appendU32(header, static_cast<std::uint32_t>(reference.contigs.size()));
     appendU64(header, reference.bases);
     appendU64(header, reference.digest);
@@ -936,7 +1011,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     if (!magic || !version || !headerSize || !flags || !contigCount || !referenceBases ||
         !referenceDigest || !tableBytes || !storedChecksum ||
         !std::equal(kMagic.begin(), kMagic.end(), magic->begin()) || *version != kVersion ||
-        *flags != 0U || *headerSize != kGlobalHeaderSize + *tableBytes ||
+        (*flags & ~kGlobalFlagPaired) != 0U || *headerSize != kGlobalHeaderSize + *tableBytes ||
         *tableBytes > kMaxHeaderTableBytes || *contigCount == 0U ||
         *contigCount > std::numeric_limits<std::uint32_t>::max()) {
         return makeError<GlobalHeader>(ErrorCode::kFormatError,
@@ -983,6 +1058,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     }
     header.referenceBases = *referenceBases;
     header.digest = *referenceDigest;
+    header.paired = (*flags & kGlobalFlagPaired) != 0U;
     return header;
 }
 
@@ -991,12 +1067,15 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                               std::span<const ReadRecord> records,
                               const Reference& reference,
                               const std::unordered_map<std::string, PafAlignment>& alignments,
+                              const std::unordered_map<std::string, PafAlignment>& mateAlignments,
+                              bool paired,
                               std::uint32_t maxMismatches)
     -> Result<std::pair<std::uint64_t, BlockStats>> {
     const auto idsRaw = buildIdStream(records);
     const auto idsFront = buildFrontCodedIdStream(records);
     const auto qualitiesRaw = buildQualityStream(records);
-    auto [alignmentsRaw, blockStats] = encodeBlock(records, reference, alignments, maxMismatches);
+    auto [alignmentsRaw, blockStats] =
+        encodeBlock(records, reference, alignments, mateAlignments, paired, maxMismatches);
 
     FQC_TRY_ASSIGN(rawIds, zstdCompress(idsRaw, kZstdLevel));
     FQC_TRY_ASSIGN(frontIds, zstdCompress(idsFront, kZstdLevel));
@@ -1069,7 +1148,12 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                                std::span<const std::uint8_t> qualitiesRaw,
                                std::span<const std::uint8_t> alignments,
                                std::uint32_t recordCount,
-                               const Reference& reference) -> Result<DecodedBlock> {
+                               const Reference& reference,
+                               bool paired) -> Result<DecodedBlock> {
+    if (paired && (recordCount % 2U) != 0U) {
+        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                       "paired block has an odd record count");
+    }
     Cursor idCursor(idsRaw);
     auto idCount = idCursor.readVarint();
     if (!idCount || *idCount != recordCount) {
@@ -1126,18 +1210,23 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     DecodedBlock block;
     block.records.reserve(recordCount);
     Cursor alignmentCursor(alignments);
+    bool previousMapped = false;
+    std::uint64_t previousContigId = 0;
+    std::uint64_t previousTargetStart = 0;
     for (std::uint32_t i = 0; i < recordCount; ++i) {
         auto flags = alignmentCursor.readU8();
         auto readLength = alignmentCursor.readVarint();
         if (!flags || !readLength || *readLength == 0 || *readLength != qualities[i].size() ||
-            (*flags & ~0x0FU) != 0U) {
+            (*flags & ~kReadFlagMask) != 0U) {
             return makeError<DecodedBlock>(ErrorCode::kFormatError, "invalid read flags/length");
         }
         const bool literal = (*flags & kReadFlagLiteral) != 0U;
         const bool mapped = (*flags & kReadFlagMapped) != 0U;
         const bool reverse = (*flags & kReadFlagReverse) != 0U;
         const bool extended = (*flags & kReadFlagExtended) != 0U;
-        if (literal == mapped || (literal && (reverse || extended))) {
+        const bool mateDelta = (*flags & kReadFlagMateDelta) != 0U;
+        if (literal == mapped || (literal && (reverse || extended || mateDelta)) ||
+            (mateDelta && (!paired || (i % 2U) == 0U))) {
             return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                            "read must be mapped xor literal");
         }
@@ -1162,6 +1251,8 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         };
 
         std::string sequence;
+        std::uint64_t decodedContigId = 0;
+        std::uint64_t decodedTargetStart = 0;
         if (literal) {
             auto bytes = alignmentCursor.readBytes(static_cast<std::size_t>(*readLength));
             if (!bytes) {
@@ -1170,14 +1261,46 @@ void appendVarint(Bytes& output, std::uint64_t value) {
             sequence.assign(reinterpret_cast<const char*>(bytes->data()), bytes->size());
             ++block.stats.literal;
         } else {
-            auto contigId = alignmentCursor.readVarint();
-            auto targetStart = alignmentCursor.readVarint();
-            if (!contigId || !targetStart || *contigId >= reference.contigs.size() ||
-                *targetStart > reference.contigs[*contigId].sequence.size()) {
+            if (mateDelta) {
+                auto encodedDelta = alignmentCursor.readVarint();
+                if (!encodedDelta || !previousMapped) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "mate delta without a mapped first mate");
+                }
+                if ((*encodedDelta & 1U) == 0U) {
+                    const auto magnitude = *encodedDelta >> 1U;
+                    if (magnitude >
+                        std::numeric_limits<std::uint64_t>::max() - previousTargetStart) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "mate delta overflows target start");
+                    }
+                    decodedTargetStart = previousTargetStart + magnitude;
+                } else {
+                    const auto magnitude = (*encodedDelta >> 1U) + 1U;
+                    if (magnitude > previousTargetStart) {
+                        return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                       "mate delta underflows target start");
+                    }
+                    decodedTargetStart = previousTargetStart - magnitude;
+                }
+                decodedContigId = previousContigId;
+                ++block.stats.mateDeltas;
+            } else {
+                auto contigId = alignmentCursor.readVarint();
+                auto targetStart = alignmentCursor.readVarint();
+                if (!contigId || !targetStart) {
+                    return makeError<DecodedBlock>(ErrorCode::kFormatError,
+                                                   "invalid mapped read coordinates");
+                }
+                decodedContigId = *contigId;
+                decodedTargetStart = *targetStart;
+            }
+            if (decodedContigId >= reference.contigs.size() ||
+                decodedTargetStart > reference.contigs[decodedContigId].sequence.size()) {
                 return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                                "invalid mapped read coordinates");
             }
-            const auto& referenceSequence = reference.contigs[*contigId].sequence;
+            const auto& referenceSequence = reference.contigs[decodedContigId].sequence;
 
             if (extended) {
                 auto queryStart = alignmentCursor.readVarint();
@@ -1231,8 +1354,8 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                     }
                 }
                 if (querySpan != *queryEnd - *queryStart ||
-                    *targetStart > referenceSequence.size() ||
-                    targetSpan > referenceSequence.size() - *targetStart) {
+                    decodedTargetStart > referenceSequence.size() ||
+                    targetSpan > referenceSequence.size() - decodedTargetStart) {
                     return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                                    "CIGAR spans disagree with coordinates");
                 }
@@ -1273,7 +1396,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                 std::string aligned;
                 aligned.reserve(static_cast<std::size_t>(querySpan));
                 std::size_t insertionOffset = 0;
-                std::uint64_t targetOffset = *targetStart;
+                std::uint64_t targetOffset = decodedTargetStart;
                 for (const auto& operation : operations) {
                     if (operation.code == 0U) {
                         if (operation.length > referenceSequence.size() - targetOffset) {
@@ -1333,12 +1456,12 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                 }
             } else {
                 auto mismatchCount = alignmentCursor.readVarint();
-                if (!mismatchCount || *readLength > referenceSequence.size() - *targetStart ||
+                if (!mismatchCount || *readLength > referenceSequence.size() - decodedTargetStart ||
                     *mismatchCount > *readLength) {
                     return makeError<DecodedBlock>(ErrorCode::kFormatError,
                                                    "invalid mapped read coordinates");
                 }
-                sequence = referenceSequence.substr(static_cast<std::size_t>(*targetStart),
+                sequence = referenceSequence.substr(static_cast<std::size_t>(decodedTargetStart),
                                                     static_cast<std::size_t>(*readLength));
                 if (!applyMismatches(sequence, *mismatchCount, *readLength)) {
                     return makeError<DecodedBlock>(ErrorCode::kFormatError,
@@ -1349,6 +1472,13 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                 }
             }
             ++block.stats.mapped;
+        }
+        if (literal) {
+            previousMapped = false;
+        } else {
+            previousMapped = true;
+            previousContigId = decodedContigId;
+            previousTargetStart = decodedTargetStart;
         }
 
         if (sequence.size() != qualities[i].size()) {
@@ -1371,8 +1501,8 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                              std::uint32_t expectedBlockId,
                              const Reference& reference,
                              RefStats& stats,
-                             std::uint64_t& globalChecksum)
-    -> Result<std::optional<std::vector<ReadRecord>>> {
+                             std::uint64_t& globalChecksum,
+                             bool paired) -> Result<std::optional<std::vector<ReadRecord>>> {
     std::array<std::uint8_t, 4> markerBytes{};
     FQC_TRY(readExact(input, markerBytes));
     Cursor markerCursor(markerBytes);
@@ -1393,7 +1523,8 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         auto checksum = cursor.readU64();
         if (!footerMagic || !size || !blockCount || !recordCount || !totalBases || !checksum ||
             *size != kFooterSize || *blockCount != stats.blocks || *recordCount != stats.records ||
-            *totalBases != stats.bases || *checksum != globalChecksum) {
+            (paired && (*recordCount % 2U) != 0U) || *totalBases != stats.bases ||
+            *checksum != globalChecksum) {
             return makeError<std::optional<std::vector<ReadRecord>>>(
                 ErrorCode::kFormatError, "invalid fqc-max-ref/v1 footer");
         }
@@ -1436,6 +1567,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
         !rawQualitiesSize || !qualitiesSize || !rawAlignmentsSize || !alignmentsSize || !checksum ||
         !idCodec || !qualityCodec || !reserved || !headerChecksum || !codecIdsSize ||
         *headerSize != kBlockHeaderSize || *blockId != expectedBlockId || *recordCount == 0 ||
+        (paired && (*recordCount % 2U) != 0U) ||
         (*idCodec != kIdCodecRawZstd && *idCodec != kIdCodecFrontZstd) || *qualityCodec > 1 ||
         *reserved != 0U || (*idCodec == kIdCodecRawZstd && *codecIdsSize != 0U) ||
         (*idCodec == kIdCodecFrontZstd && *codecIdsSize == 0U)) {
@@ -1502,7 +1634,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
                                                                  "block checksum mismatch");
     }
 
-    auto block = decodeBlock(ids, *qualities, alignmentsRaw, *recordCount, reference);
+    auto block = decodeBlock(ids, *qualities, alignmentsRaw, *recordCount, reference, paired);
     if (!block) {
         return makeError<std::optional<std::vector<ReadRecord>>>(block.error());
     }
@@ -1529,6 +1661,7 @@ void appendVarint(Bytes& output, std::uint64_t value) {
     stats.fqzBlocks += block->stats.fqzBlocks;
     stats.zstdQualityBlocks += block->stats.zstdQualityBlocks;
     stats.frontIdBlocks += block->stats.frontIdBlocks;
+    stats.mateDeltas += block->stats.mateDeltas;
     for (const auto& record : block->records) {
         stats.bases += record.sequence.size();
     }
@@ -1546,7 +1679,9 @@ void writeFastqRecord(std::ostream& output, const ReadRecord& record) {
 
 [[nodiscard]] auto decodeArchive(const std::filesystem::path& archivePath,
                                  const std::filesystem::path& referencePath,
-                                 std::ostream* output) -> Result<RefStats> {
+                                 std::ostream* output,
+                                 std::ostream* mateOutput,
+                                 bool requirePaired) -> Result<RefStats> {
     FQC_TRY_ASSIGN(reference, loadReference(referencePath));
     std::ifstream input(archivePath, std::ios::binary);
     if (!input) {
@@ -1567,13 +1702,25 @@ void writeFastqRecord(std::ostream& output, const ReadRecord& record) {
                                        "archive/reference contig table disagrees");
         }
     }
+    if (requirePaired && !header.paired) {
+        return makeError<RefStats>(ErrorCode::kUsageError, "archive is not paired-end");
+    }
+    if (mateOutput != nullptr && !header.paired) {
+        return makeError<RefStats>(ErrorCode::kUsageError,
+                                   "cannot split a single-end archive into mates");
+    }
 
     RefStats stats;
     stats.inputBytes = std::filesystem::file_size(archivePath);
     std::uint64_t globalChecksum = 0;
+    std::uint64_t recordIndex = 0;
     for (;;) {
-        auto block = readBlock(
-            input, static_cast<std::uint32_t>(stats.blocks), reference, stats, globalChecksum);
+        auto block = readBlock(input,
+                               static_cast<std::uint32_t>(stats.blocks),
+                               reference,
+                               stats,
+                               globalChecksum,
+                               header.paired);
         if (!block) {
             return makeError<RefStats>(block.error());
         }
@@ -1583,10 +1730,17 @@ void writeFastqRecord(std::ostream& output, const ReadRecord& record) {
         for (const auto& record : **block) {
             stats.outputBytes += canonicalFastqBytes(record);
             if (output != nullptr) {
-                writeFastqRecord(*output, record);
+                if (mateOutput != nullptr) {
+                    auto& destination = (recordIndex % 2U) == 0U ? *output : *mateOutput;
+                    writeFastqRecord(destination, record);
+                } else {
+                    writeFastqRecord(*output, record);
+                }
             }
+            ++recordIndex;
         }
     }
+    stats.pairs = header.paired ? stats.records / 2U : 0U;
     return stats;
 }
 
@@ -1596,13 +1750,25 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
     if (request.blockBases == 0) {
         return makeError<RefStats>(ErrorCode::kUsageError, "block size must be positive");
     }
-    if (request.inputPath == request.outputPath) {
-        return makeError<RefStats>(ErrorCode::kUsageError, "input and output must differ");
-    }
-    if (request.outputPath == request.referencePath || request.outputPath == request.pafPath ||
-        request.inputPath == request.referencePath || request.inputPath == request.pafPath) {
+    const bool paired = request.mateInputPath.has_value();
+    if (paired != request.matePafPath.has_value()) {
         return makeError<RefStats>(ErrorCode::kUsageError,
-                                   "FASTQ, reference and PAF paths must be distinct");
+                                   "mate FASTQ and mate PAF must be supplied together");
+    }
+
+    std::vector<std::filesystem::path> distinctPaths = {
+        request.inputPath, request.pafPath, request.referencePath, request.outputPath};
+    if (paired) {
+        distinctPaths.push_back(*request.mateInputPath);
+        distinctPaths.push_back(*request.matePafPath);
+    }
+    for (std::size_t i = 0; i < distinctPaths.size(); ++i) {
+        for (std::size_t j = i + 1; j < distinctPaths.size(); ++j) {
+            if (distinctPaths[i] == distinctPaths[j]) {
+                return makeError<RefStats>(ErrorCode::kUsageError,
+                                           "FASTQ, reference, PAF and archive paths must differ");
+            }
+        }
     }
     std::error_code error;
     if (std::filesystem::exists(request.outputPath, error) && !request.forceOverwrite) {
@@ -1612,10 +1778,27 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
 
     FQC_TRY_ASSIGN(reference, loadReference(request.referencePath));
     FQC_TRY_ASSIGN(alignments, loadPaf(request.pafPath));
+    std::unordered_map<std::string, PafAlignment> mateAlignments;
+    if (paired) {
+        FQC_TRY_ASSIGN(loadedMateAlignments, loadPaf(*request.matePafPath));
+        mateAlignments = std::move(loadedMateAlignments);
+    }
+
     std::ifstream input(request.inputPath, std::ios::binary);
     if (!input) {
         return makeError<RefStats>(ErrorCode::kIOError,
                                    "failed to open FASTQ: " + request.inputPath.string());
+    }
+    std::ifstream mateInput;
+    std::optional<io::FastqParser> mateParser;
+    if (paired) {
+        mateInput.open(*request.mateInputPath, std::ios::binary);
+        if (!mateInput) {
+            return makeError<RefStats>(ErrorCode::kIOError,
+                                       "failed to open mate FASTQ: " +
+                                           request.mateInputPath->string());
+        }
+        mateParser.emplace(mateInput);
     }
     std::ofstream output(request.outputPath, std::ios::binary | std::ios::trunc);
     if (!output) {
@@ -1623,7 +1806,7 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
                                    "failed to open output: " + request.outputPath.string());
     }
 
-    FQC_TRY(writeGlobalHeader(output, reference));
+    FQC_TRY(writeGlobalHeader(output, reference, paired));
     io::FastqParser parser(input);
     RefStats stats;
     std::uint64_t globalChecksum = 0;
@@ -1631,30 +1814,53 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
         std::vector<ReadRecord> block;
         std::uint64_t bases = 0;
         while (bases < request.blockBases) {
-            auto record = parser.readRecord();
-            if (!record) {
-                return makeError<RefStats>(record.error());
+            if (paired) {
+                FQC_TRY_ASSIGN(pair, io::readRecordPair(parser, &*mateParser));
+                if (!pair.has_value()) {
+                    break;
+                }
+                if (!pairIdsMatch(pair->first.id, pair->second->id)) {
+                    return makeError<RefStats>(ErrorCode::kFormatError,
+                                               "paired FASTQ IDs do not match");
+                }
+                bases += pair->first.sequence.size() + pair->second->sequence.size();
+                block.push_back(std::move(pair->first));
+                block.push_back(std::move(*pair->second));
+            } else {
+                auto record = parser.readRecord();
+                if (!record) {
+                    return makeError<RefStats>(record.error());
+                }
+                if (!record->has_value()) {
+                    break;
+                }
+                bases += (*record)->sequence.size();
+                block.push_back(std::move(**record));
             }
-            if (!record->has_value()) {
-                break;
-            }
-            bases += (*record)->sequence.size();
-            block.push_back(std::move(**record));
         }
         if (block.empty()) {
             break;
+        }
+        if (paired && (block.size() % 2U) != 0U) {
+            return makeError<RefStats>(ErrorCode::kInternalError,
+                                       "paired block has an odd record count");
         }
         auto written = writeBlock(output,
                                   static_cast<std::uint32_t>(stats.blocks),
                                   block,
                                   reference,
                                   alignments,
+                                  mateAlignments,
+                                  paired,
                                   request.maxMismatches);
         if (!written) {
             return makeError<RefStats>(written.error());
         }
         stats.blocks += 1;
         stats.records += block.size();
+        if (paired) {
+            stats.pairs += block.size() / 2U;
+        }
         stats.bases += bases;
         stats.mapped += written->second.mapped;
         stats.literal += written->second.literal;
@@ -1666,6 +1872,7 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
         stats.fqzBlocks += written->second.fqzBlocks;
         stats.zstdQualityBlocks += written->second.zstdQualityBlocks;
         stats.frontIdBlocks += written->second.frontIdBlocks;
+        stats.mateDeltas += written->second.mateDeltas;
         globalChecksum = format::advanceGlobalChecksum(globalChecksum, written->first);
     }
 
@@ -1683,6 +1890,9 @@ auto compress(const RefCompressionRequest& request) -> Result<RefStats> {
         return makeError<RefStats>(ErrorCode::kIOError, "failed to flush archive");
     }
     stats.inputBytes = std::filesystem::file_size(request.inputPath);
+    if (paired) {
+        stats.inputBytes += std::filesystem::file_size(*request.mateInputPath);
+    }
     stats.outputBytes = std::filesystem::file_size(request.outputPath);
     return stats;
 }
@@ -1705,7 +1915,7 @@ auto decompress(const std::filesystem::path& archivePath,
         return makeError<RefStats>(ErrorCode::kIOError,
                                    "failed to open output: " + outputPath.string());
     }
-    auto stats = decodeArchive(archivePath, referencePath, &output);
+    auto stats = decodeArchive(archivePath, referencePath, &output, nullptr, false);
     if (!stats) {
         return stats;
     }
@@ -1716,9 +1926,56 @@ auto decompress(const std::filesystem::path& archivePath,
     return stats;
 }
 
+auto decompressPaired(const std::filesystem::path& archivePath,
+                      const std::filesystem::path& referencePath,
+                      const std::filesystem::path& r1OutputPath,
+                      const std::filesystem::path& r2OutputPath,
+                      bool forceOverwrite) -> Result<RefStats> {
+    if (r1OutputPath == r2OutputPath) {
+        return makeError<RefStats>(ErrorCode::kUsageError, "mate output paths must differ");
+    }
+    const std::vector<std::filesystem::path> paths = {
+        archivePath, referencePath, r1OutputPath, r2OutputPath};
+    for (std::size_t i = 0; i < paths.size(); ++i) {
+        for (std::size_t j = i + 1; j < paths.size(); ++j) {
+            if (paths[i] == paths[j]) {
+                return makeError<RefStats>(ErrorCode::kUsageError,
+                                           "archive, reference and outputs must be distinct");
+            }
+        }
+    }
+    std::error_code error;
+    for (const auto& path : {r1OutputPath, r2OutputPath}) {
+        if (std::filesystem::exists(path, error) && !forceOverwrite) {
+            return makeError<RefStats>(ErrorCode::kIOError,
+                                       "output already exists: " + path.string());
+        }
+    }
+    std::ofstream r1Output(r1OutputPath, std::ios::binary | std::ios::trunc);
+    if (!r1Output) {
+        return makeError<RefStats>(ErrorCode::kIOError,
+                                   "failed to open R1 output: " + r1OutputPath.string());
+    }
+    std::ofstream r2Output(r2OutputPath, std::ios::binary | std::ios::trunc);
+    if (!r2Output) {
+        return makeError<RefStats>(ErrorCode::kIOError,
+                                   "failed to open R2 output: " + r2OutputPath.string());
+    }
+    auto stats = decodeArchive(archivePath, referencePath, &r1Output, &r2Output, true);
+    if (!stats) {
+        return stats;
+    }
+    r1Output.flush();
+    r2Output.flush();
+    if (!r1Output || !r2Output) {
+        return makeError<RefStats>(ErrorCode::kIOError, "failed to flush FASTQ outputs");
+    }
+    return stats;
+}
+
 auto verify(const std::filesystem::path& archivePath,
             const std::filesystem::path& referencePath) -> Result<RefStats> {
-    return decodeArchive(archivePath, referencePath, nullptr);
+    return decodeArchive(archivePath, referencePath, nullptr, nullptr, false);
 }
 
 }  // namespace fqc::tools::ref
