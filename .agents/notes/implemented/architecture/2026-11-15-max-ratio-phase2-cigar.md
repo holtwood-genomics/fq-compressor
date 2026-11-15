@@ -50,7 +50,9 @@ soft clip 不支持 indel，真实数据仍会留下大量 literal。因此需�
 - 代价：解码多了 CIGAR 重建、insertion/clip 边界和负链方向分支；只追求压缩比，不做
   速度门禁。
 - 边界：仍只支持短读、PAF、external reference；不支持 S/H/N/P、长读 spliced alignment、
-  BAM/CRAM、paired-end、参考嵌入、SHA-256、真实 30× WGS 验收。
+  BAM/CRAM、参考嵌入、SHA-256、真实 30× WGS 验收。后续 Phase 2.3 paired 容器与
+  R2 坐标 delta 见
+  [2026-11-15-max-ratio-paired-end.md](2026-11-15-max-ratio-paired-end.md)。
 - 兼容性：新解码器可读旧归档；旧工具会拒绝带 bit3 的新归档，是实验工具的单向扩展。
 
 ## Verification

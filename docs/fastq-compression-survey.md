@@ -300,16 +300,21 @@ NovaSeq 6000、约 35×、双端 `fastq.gz`，8 线程；Genozip 使用 `--refer
    mapped 49,998/50,000、literal 2/0，`verify`/`cmp` 通过。进一步用真实 `SRR14724532`
    R1 头部 298,974 reads + 完整 hg38 重测，归档 **4,547,935 B（21.974× raw）**，
    mapped 296,343、literal 2,631；quality/alignment/ID 三路为 2,181,008/2,352,120/3,701 B，
-   说明真实 WGS 的主要矛盾在 quality 与 alignment，不是 ID。参考/PAF 不计入，仍是单
-   R1 头部，不是完整 30× WGS。Phase 2.1 又验证了 ID front coding：真实 WGS/NovaSeq 头部
-   ID 探针约 −99%，随机 wgsim ID 自动回退 raw；人工结构化 ID + CIGAR 合成 R1 为
-   296,082 B（59.781× raw），仍是合成机制验证。
+   说明真实 WGS 的主要矛盾在 quality 与 alignment，不是 ID。同一 R1/R2 头部再启用
+   paired 容器：两个单端归档之和 9,678,812 B（20.650× raw）降到 8,825,785 B
+   （22.646× raw），alignment 流 −17.10%，quality 流 +0.046%，`mate_deltas=277,453`
+   （92.80%）；收益主要来自 R2 相对 R1 的坐标 delta，而不是联合质量模型。参考/PAF
+   不计入，R1 和 paired 都仍是头部小切片，不是完整 30× WGS。Phase 2.1 又验证了 ID
+   front coding：真实 WGS/NovaSeq 头部 ID 探针约 −99%，随机 wgsim ID 自动回退 raw；
+   人工结构化 ID + CIGAR 合成 R1 为 296,082 B（59.781× raw），仍是合成机制验证。
 5. **速度后置**：本节的 20×+ 工具大多比 fast 模式慢一个数量级以上；先追压缩比，再谈速度。
 
 ### 9.6 增补来源
 
 - 真实 WGS R1 头部 + 完整 hg38 小切片：
   [2026-11-15-real-wgs-srr14724532.md](max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md)
+- 真实 WGS R1/R2 paired 头部 + 完整 hg38 小切片：
+  [2026-11-15-real-wgs-paired.md](max-ratio-baselines/2026-11-15-real-wgs-paired.md)
 
 - Betschart et al., *Sci Rep* 15, 15358 (2025), DOI 10.1038/s41598-025-00491-8。
 - Illumina ORA 技术页与格式说明（序列 0.3–0.5 bits/nt、质量 range coder、ID token 化、

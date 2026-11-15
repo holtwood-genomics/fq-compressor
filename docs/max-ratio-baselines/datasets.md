@@ -1,6 +1,6 @@
 # max-ratio 数据集 manifest
 
-- 状态：Phase 0 可追溯数据集清单（2026-11-15）
+- 状态：Phase 0 可追溯数据集清单；含 Phase 2.3 paired 头部小切片（2026-11-15）
 - 机器可读副本：[datasets.json](datasets.json)
 - 设计：[docs/max-ratio-design.md](../max-ratio-design.md)
 - 探针：[tools/ratio_probe/README.md](../../tools/ratio_probe/README.md)
@@ -14,7 +14,9 @@
 |---|---|---|---|---|---|---|
 | `hiseq-hartwig-25k-r1` | 全质量 HiSeq 质量/ID 基线 | Hartwig Medical `100k_reads_hiseq` R1 | HiSeq，短读 | 25,000 reads / 2,525,000 bases | 6,538,676 B FASTQ；1,957,197 B gzip | 已下载并固定 SHA |
 | `novaseq-drr174812-r1-head` | NovaSeq 分箱质量基线 | ENA `DRR174812` R1；study `PRJDB8092` | NovaSeq 6000，RNA-Seq，2×150 | 14,723,420 spots / 4,417,026,000 bases | gzip 前 21,110,784 B；解压并裁成 303,610 reads / 45,541,500 bases | 已下载头部子集并固定 SHA |
-| `wgs-srr14724532-r1-head` | 深覆盖 WGS 质量基线 | ENA `SRR14724532` R1；GIAB/NIST | NovaSeq 6000，WGS，2×150，约 35× | 355,791,257 spots / 107,448,959,614 bases（双端合计） | gzip 前 21,110,784 B；解压并裁成 298,974 reads / 45,145,074 bases | 头部子集已下载并固定 SHA；完整 run 未下载 |
+| `wgs-srr14724532-r1-head` | 深覆盖 WGS 质量/单端参考基线 | ENA `SRR14724532` R1；GIAB/NIST | NovaSeq 6000，WGS，2×150，约 35× | 355,791,257 spots / 107,448,959,614 bases（双端合计） | gzip 前 21,110,784 B；解压并裁成 298,974 reads / 45,145,074 bases | 头部子集已下载并固定 SHA；完整 run 未下载 |
+| `wgs-srr14724532-r2-head` | paired R2 头部基线 | ENA `SRR14724532` R2；GIAB/NIST | NovaSeq 6000，WGS，2×150 | 同完整 run | gzip 前 40,000,000 B；解压并裁成 298,974 reads / 99,934,080 B | 头部子集已下载并固定 SHA |
+| `real-wgs-srr14724532-paired-hg38` | 真实 WGS paired 参考归档实验 | R1/R2 头部 + 完整 UCSC hg38 | paired 2×151 bp；external reference/PAF | R1/R2 各 298,974 reads；双端 90,290,148 bases | paired 归档 8,825,785 B（22.646× raw） | `verify`/`decompress-paired`/`cmp` 通过；不是完整 30× |
 | `synthetic-ref-5m-wgsim` | Phase 2 参考机制验证 | 本地固定 seed 20261115 | 随机 5 Mb 参考，wgsim 3× 双端 150 bp | — | 参考 5,071,439 B；R1/R2 各 17,423,235 B | 合成输入与 PAF 已固定 SHA |
 | `synthetic-ref-5m-wgsim-structured-id` | Phase 2.1 ID codec 验证（派生） | 从上一行 R1 派生 | 同左，ID/PAF query name 改为结构化 | — | R1 17,700,000 B；PAF 9,071,979 B；归档 331,553 B | 派生输入/归档 SHA 已固定 |
 
@@ -96,6 +98,25 @@
 - 用途：Phase 1 质量 codec 的 WGS 质量 regime 验证；Phase 2/3 的完整序列冗余验证仍需
   完整 run 或固定分片快照。
 - 不能把 ENA 的 spot/base count 直接当成本地 FASTQ 字节；本地快照必须另记 SHA-256。
+
+### 4.1 R2 头部快照（Phase 2.3 paired）
+
+R2 使用与 R1 对齐的同一批 read，只取 R2 gzip 的前 40,000,000 字节，再按完整 4 行记录
+裁剪为 298,974 条；截断 gzip 的 EOF 不是数据错误。
+
+| 文件 | 字节 | SHA-256 |
+|---|---:|---|
+| `SRR14724532_2.head40m.fastq.gz` | 40,000,000 | `53644acf28e7cfc132f13beb7fde816ef26b8cc1b66480211b48e8b878cf32ee` |
+| `SRR14724532_R2.head.fastq` | 99,934,080 | `546a6986830155f700dcead34e9cbff0291596a4e7887d760a3cd26467ee72e3` |
+| `SRR14724532_R2.head.paf` | 48,788,417 | `46774f8584f240677420a2c86b0aa69d1e14fe658abeccf8b4fa2ba09d68c784` |
+
+- 子集统计：298,974 reads，151 bp，45,145,074 bases，158 N，4 个质量符号，平均 Q35.36。
+- R2 PAF：296,346 条 primary alignment；正链 148,558 / 负链 147,788；CIGAR 计数
+  `M=44,018,961`、`I=29,001`、`D=39,319`，没有 `S/H/N/P`；NM 均值 1.051、最大 112。
+- R2 单端归档：5,130,877 B（19.477× raw），SHA
+  `2528b4cca24afb4298eec40c92d5163f94608c88ae746058199c95dd9ba9fb7f`。
+- R2 的 gzip -6 / zstd -19 / FQC v2 / CRAM 对照分别为 21,676,462 / 16,949,483 /
+  17,451,743 / 6,494,171 B；CRAM 是 alignment container，不是 FASTQ 归档等价物。
 
 ## 5. Phase 2 参考机制验证
 
@@ -187,6 +208,31 @@ PAF 计入时 1.865×。参考/PAF 不计入的主口径是 21.974×，不能外
 完整命令、字节账和 soft-mask 修复记录见
 [2026-11-15-real-wgs-srr14724532.md](2026-11-15-real-wgs-srr14724532.md)。
 
+### 5.3 真实 WGS paired 头部归档（Phase 2.3）
+
+把同一批 R1/R2 头部放入一个 paired 容器：R1/R2 锁步读取，同 block 交错；R2 双方 mapped
+且同 contig 时存相对 R1 的 `targetStart` zigzag delta，否则保留绝对坐标。参考和 PAF 仍是
+external，不计入主口径。
+
+| 文件/结果 | 字节 | SHA-256 |
+|---|---:|---|
+| `SRR14724532.paired.head.fqmr` | **8,825,785** | `09cfec68802291c6f4342e3ddee338ed5d3dc5e6b404755895b00e28a58dd4e5` |
+| 恢复 R1 FASTQ | 99,934,080 | `d4f6c8bee191ee8cc5207cca5fb86659a2aaa02e3f493b35f2ed50027ab6e0f4` |
+| 恢复 R2 FASTQ | 99,934,080 | `546a6986830155f700dcead34e9cbff0291596a4e7887d760a3cd26467ee72e3` |
+
+- R1 单端 + R2 单端 = 4,547,935 + 5,130,877 = **9,678,812 B（20.650× raw）**；
+  paired = **8,825,785 B（22.646× raw）**，节省 853,027 B（8.813%）。
+- 归档统计：`records=597948 pairs=298974 bases=90290148 mapped=590436 literal=7512`
+  `clipped=24598 indel=20393 ids=6880 qualities=4711904 alignments=4094927`
+  `mate_deltas=277453`。alignment 流相对两个单端之和为 −17.10%，quality 为 +0.046%。
+- `verify`、`decompress-paired`、R1/R2 `cmp` 通过；重复 paired 压缩的归档 SHA 相同；
+  新解码器可读旧 R1 单端归档，且用新代码重压 R1 得到与旧归档逐字节一致的结果。
+- 边界：R1/R2 都是头部小切片，不是完整 35× run；没有跨 mate 共享 ID、联合质量或
+  insert-size 模型；CRAM 对照是两个独立 alignment container 之和。
+
+完整命令、外部基线、字节账与运行事实见
+[2026-11-15-real-wgs-paired.md](2026-11-15-real-wgs-paired.md)。
+
 ## 6. ENA 元数据查询
 
 可复现查询：
@@ -204,8 +250,10 @@ ENA 页面与文件可能更新；本清单以 2026-11-15 查询结果和本地 
 
 - `hiseq-hartwig-25k-r1` 只有 25k reads，不能代表 30× WGS。
 - `novaseq-drr174812-r1-head` 是 RNA-Seq 头部子集，不是完整 run，也不是 WGS。
-- `wgs-srr14724532-r1-head` 只有头部约 300k reads；完整 run 未下载，不能代表 35× WGS。
-- §5.2 已完成该头部的完整 hg38 参考归档，但仍不是完整 30× run、paired-end 或外部工具同数据验收。
-- 三个数据集都没有 paired-end 联合压缩、CRLF、IUPAC 或空 read 的完整验收；这些由
-  `ratio_probe_test` 的合成 fixture 单独覆盖。
+- `wgs-srr14724532-r1-head` 与 `wgs-srr14724532-r2-head` 都只有头部约 300k reads；
+  完整 35× run 未下载，不能代表完整 WGS 的覆盖分布。
+- §5.2 是单 R1 头部归档；§5.3 是 R1/R2 头部 paired 容器。两者都不是完整 30× run，
+  也都不是跨 mate 质量/ID 联合模型或外部工具同数据验收。
+- 这些数据集都没有 CRLF、IUPAC 或空 read 的完整验收；这些由 `ratio_probe_test` 的
+  合成 fixture 单独覆盖。
 - 外部 ORA/Genozip/SPRING/PgRC2 数字仍只按调研证据引用，未在本地复测。

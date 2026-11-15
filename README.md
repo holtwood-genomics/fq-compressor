@@ -11,9 +11,9 @@
 > （Rust，`fqc-indexed/v2`，magic `89 46 51 43 0D 0A 1A 0A`）同名但**格式不兼容**——
 > magic 与字节布局不同，不能互相解码；`.fqc` 扩展名不能判定格式，reader 必须检查 archive magic。
 
-> **最高压缩比实验（非默认 CLI）**：external reference + PAF，在真实 WGS R1 头部
-> 298,974 reads + 完整 hg38 上达到 **21.974× raw**；参考/PAF 不计入，不是完整 30×。
-> 详见 [一页纸总结](docs/max-ratio-one-pager.md)。
+> **最高压缩比实验（非默认 CLI）**：external reference + PAF，在真实 WGS R1/R2 各
+> 298,974 reads + 完整 hg38 上达到 **22.646× raw**；两个单端归档之和为 20.650×。
+> 参考/PAF 不计入，不是完整 30×。详见 [一页纸总结](docs/max-ratio-one-pager.md)。
 
 [![CI 状态](https://github.com/open-genomics/fq-compressor/actions/workflows/ci.yml/badge.svg)](https://github.com/open-genomics/fq-compressor/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/open-genomics/fq-compressor/branch/master/graph/badge.svg)](https://codecov.io/gh/open-genomics/fq-compressor)
@@ -152,10 +152,14 @@ WGS/NovaSeq 头部 ID 探针上约 −99%，随机 wgsim ID 自动回退 raw；�
 合成 R1 为 296,082 B（59.781× raw），同样是机制验证。进一步用真实 `SRR14724532`
 R1 头部 298,974 reads + 完整 hg38 参考重测：归档 **4,547,935 B（21.974× raw）**，
 mapped 296,343/298,974，quality/alignment/ID 三路为 2,181,008/2,352,120/3,701 B；
-`verify` 与 `cmp` 通过，重复压缩 SHA 一致。参考/PAF 不计入，仍是单 R1 头部，不是
-完整 30× WGS。但 `--max-ratio` 顶层开关、内置 mapper/BAM、S/H/N/P/长读 spliced
-alignment、伪基因组（Phase 3）与最终逐字节格式**仍未实现**；`max-compress` 与
-`fqc_ref_archive` 是显式实验入口，默认 CLI 与 `fqc-sequential/v2` 不变。
+`verify` 与 `cmp` 通过，重复压缩 SHA 一致。paired 扩展进一步把 R1/R2 放进同一
+容器，并用 R2 相对 R1 的坐标 delta：R1/R2 各 298,974 reads 上，两个单端归档之和
+9,678,812 B（20.650×）降到 **8,825,785 B（22.646×）**，节省 8.813%；alignment 流
+−17.10%，`mate_deltas=277,453/298,974`（92.80%）。参考/PAF 不计入，仍是头部小切片，
+不是完整 30× WGS。但 `--max-ratio` 顶层开关、内置 mapper/BAM、S/H/N/P/长读 spliced
+alignment、跨 mate 质量/ID 联合模型、伪基因组（Phase 3）与最终逐字节格式**仍未实现**；
+`max-compress` 与 `fqc_ref_archive` 是显式实验入口，默认 CLI 与 `fqc-sequential/v2`
+不变。
 
 ## 已知限制
 
@@ -164,9 +168,9 @@ alignment、伪基因组（Phase 3）与最终逐字节格式**仍未实现**；
   `fqc_ref_archive`，没有 `--max-ratio` 顶层开关、内置 mapper/BAM 或伪基因组。最终
   max-ratio（参考/伪基因组、逐字节 `+` 行/行尾/空 read 保真、参考身份 SHA-256）仍是
   设计目标（[docs/max-ratio-design.md](docs/max-ratio-design.md)）。
-* 参考原型的 CIGAR 只支持 PAF `M/=/X/I/D` 与 query 范围 clip；真实 WGS R1 头部 +
-  完整 hg38 小切片已完成，但 `S/H/N/P`、长读 spliced alignment、BAM/CRAM、paired-end
-  与完整 30× WGS 验收仍未完成。
+* 参考原型的 CIGAR 只支持 PAF `M/=/X/I/D` 与 query 范围 clip；真实 WGS R1/R2 头部 +
+  完整 hg38 小切片已完成，但 `S/H/N/P`、长读 spliced alignment、BAM/CRAM、完整 30×
+  paired run 与跨 mate 质量/ID 联合模型仍未完成。
 * 归档帧大小与压缩时的 `--memory-limit` 相关；用显著更低的预算解码高预算生成的归档
   可能失败（例如新版 16 GiB 归档在 64 MiB 下会被逐帧预算拒绝；旧版 64 MiB 归档在新版
   64 MiB 下约需 101 MiB）。格式不变，提高 `--memory-limit` 即可读取。
@@ -192,8 +196,10 @@ alignment、伪基因组（Phase 3）与最终逐字节格式**仍未实现**；
 | Phase 2.1 ID codec 实测 | [docs/max-ratio-baselines/2026-11-15-id-codec.md](docs/max-ratio-baselines/2026-11-15-id-codec.md) |
 | Phase 2.1 ID codec 契约 | [openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md](openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md) |
 | Phase 2.2 CIGAR 实测（合成） | [docs/max-ratio-baselines/2026-11-15-ref-cigar.md](docs/max-ratio-baselines/2026-11-15-ref-cigar.md) |
-| Phase 2 真实 WGS 实测 | [docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md](docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md) |
+| Phase 2 真实 WGS R1 实测 | [docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md](docs/max-ratio-baselines/2026-11-15-real-wgs-srr14724532.md) |
+| Phase 2.3 真实 WGS paired 实测 | [docs/max-ratio-baselines/2026-11-15-real-wgs-paired.md](docs/max-ratio-baselines/2026-11-15-real-wgs-paired.md) |
 | Phase 2.2 CIGAR 契约 | [openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md](openspec/changes/2026-11-15-max-ratio-phase2-cigar/design.md) |
+| Phase 2.3 paired 契约 | [openspec/changes/2026-11-15-max-ratio-paired-end/design.md](openspec/changes/2026-11-15-max-ratio-paired-end/design.md) |
 | 参考压缩开发工具 | [tools/ref_archive/README.md](tools/ref_archive/README.md) |
 | Phase 0 压缩比探针（开发工具） | [tools/ratio_probe/README.md](tools/ratio_probe/README.md) |
 | 质量 codec 探针（开发工具） | [tools/quality_probe/README.md](tools/quality_probe/README.md) |

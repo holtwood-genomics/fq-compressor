@@ -182,7 +182,148 @@
       "quality_symbols": 4,
       "mean_q": 35.675848,
       "status": "r1-head-reference-archive-fixed",
-      "warning": "R1 head only; full 35x run, paired-end and external-tool comparison pending; reference and PAF excluded from primary ratio; CRAM is not a FASTQ byte archive"
+      "warning": "R1 head only; full 35x run and external-tool comparison pending; paired R1/R2 head is a separate dataset entry; reference and PAF excluded from primary ratio; CRAM is not a FASTQ byte archive"
+    },
+    {
+      "id": "wgs-srr14724532-r2-head",
+      "role": "real-wgs-paired-r2-head-baseline",
+      "accession": "SRR14724532",
+      "study": "PRJNA734598",
+      "instrument": "Illumina NovaSeq 6000",
+      "library_strategy": "WGS",
+      "layout": "PAIRED",
+      "coverage": "approx-35x-full-run; r2-head-subset",
+      "local": {
+        "range": "0-39999999",
+        "gzip_bytes": 40000000,
+        "gzip_sha256": "53644acf28e7cfc132f13beb7fde816ef26b8cc1b66480211b48e8b878cf32ee",
+        "fastq_bytes": 99934080,
+        "fastq_sha256": "546a6986830155f700dcead34e9cbff0291596a4e7887d760a3cd26467ee72e3",
+        "paf_bytes": 48788417,
+        "paf_sha256": "46774f8584f240677420a2c86b0aa69d1e14fe658abeccf8b4fa2ba09d68c784",
+        "archive_bytes": 5130877,
+        "archive_sha256": "2528b4cca24afb4298eec40c92d5163f94608c88ae746058199c95dd9ba9fb7f"
+      },
+      "alignment": {
+        "minimap2_version": "2.31-r1302",
+        "command": "-x sr -c --secondary=no",
+        "primary_alignments": 296346,
+        "strand_forward": 148558,
+        "strand_reverse": 147788,
+        "cigar_m": 44018961,
+        "cigar_i": 29001,
+        "cigar_d": 39319,
+        "nm_mean": 1.051,
+        "nm_max": 112
+      },
+      "comparisons": {
+        "gzip6_bytes": 21676462,
+        "zstd19_bytes": 16949483,
+        "fqc_v2_bytes": 17451743,
+        "cram_bytes": 6494171
+      },
+      "records": 298974,
+      "bases": 45145074,
+      "read_length": 151,
+      "n_bases": 158,
+      "quality_symbols": 4,
+      "mean_q": 35.355355,
+      "status": "r2-head-single-archive-fixed",
+      "warning": "R2 head only; full 35x run, paired quality/ID model and external-tool comparison pending; CRAM is not a FASTQ byte archive",
+      "full_run": {
+        "spots": 355791257,
+        "bases": 107448959614,
+        "r1_gzip_bytes": 25019246552,
+        "r1_gzip_md5": "40eb3a20e288a581b23197fb32a5a5cc",
+        "r2_gzip_bytes": 25979206586,
+        "r2_gzip_md5": "9846d10d1eca7c52948cbe5f94d2cdaf"
+      }
+    },
+    {
+      "id": "real-wgs-srr14724532-paired-hg38",
+      "role": "real-wgs-paired-reference-archive-validation",
+      "accession": "SRR14724532",
+      "study": "PRJNA734598",
+      "instrument": "Illumina NovaSeq 6000",
+      "library_strategy": "WGS",
+      "layout": "PAIRED",
+      "coverage": "approx-35x-full-run; r1r2-head-subset",
+      "reference": {
+        "name": "UCSC hg38",
+        "fa_gzip_bytes": 983659424,
+        "fa_gzip_sha256": "c1dd87068c254eb53d944f71e51d1311964fce8de24d6fc0effc9c61c01527d4",
+        "fa_bytes": 3273481150,
+        "fa_sha256": "5be01555d98347fdb3714dc84c6f77c9d8bc774adcf32c6f7a8fa06f5baf5e51",
+        "accounting": "external; not counted in primary archive ratio"
+      },
+      "local": {
+        "r1_gzip_bytes": 21110784,
+        "r1_gzip_sha256": "286836d9d79ad8470ddcd2b395562aa4f25a347e8b424a9bb1ad5c159378b95b",
+        "r1_fastq_bytes": 99934080,
+        "r1_fastq_sha256": "d4f6c8bee191ee8cc5207cca5fb86659a2aaa02e3f493b35f2ed50027ab6e0f4",
+        "r2_gzip_bytes": 40000000,
+        "r2_gzip_sha256": "53644acf28e7cfc132f13beb7fde816ef26b8cc1b66480211b48e8b878cf32ee",
+        "r2_fastq_bytes": 99934080,
+        "r2_fastq_sha256": "546a6986830155f700dcead34e9cbff0291596a4e7887d760a3cd26467ee72e3",
+        "r1_paf_bytes": 49043976,
+        "r1_paf_sha256": "c33900ac67b0e0d5bad2297767477ecef5408e6cea0313318c44866c4983c935",
+        "r2_paf_bytes": 48788417,
+        "r2_paf_sha256": "46774f8584f240677420a2c86b0aa69d1e14fe658abeccf8b4fa2ba09d68c784"
+      },
+      "archives": {
+        "r1_single_fqmr_bytes": 4547935,
+        "r1_single_fqmr_sha256": "6f50a3146e018c33fffe6be3a21af9163b8ae1223d1b386f6f440507bb3b647a",
+        "r2_single_fqmr_bytes": 5130877,
+        "r2_single_fqmr_sha256": "2528b4cca24afb4298eec40c92d5163f94608c88ae746058199c95dd9ba9fb7f",
+        "two_single_fqmr_bytes": 9678812,
+        "paired_fqmr_bytes": 8825785,
+        "paired_fqmr_sha256": "09cfec68802291c6f4342e3ddee338ed5d3dc5e6b404755895b00e28a58dd4e5",
+        "restored_r1_fastq_bytes": 99934080,
+        "restored_r1_fastq_sha256": "d4f6c8bee191ee8cc5207cca5fb86659a2aaa02e3f493b35f2ed50027ab6e0f4",
+        "restored_r2_fastq_bytes": 99934080,
+        "restored_r2_fastq_sha256": "546a6986830155f700dcead34e9cbff0291596a4e7887d760a3cd26467ee72e3"
+      },
+      "streams": {
+        "id_bytes": 6880,
+        "quality_bytes": 4711904,
+        "alignment_bytes": 4094927,
+        "container_bytes": 12074,
+        "two_single_id_bytes": 7399,
+        "two_single_quality_bytes": 4709728,
+        "two_single_alignment_bytes": 4939473,
+        "two_single_container_bytes": 22212,
+        "mate_deltas": 277453
+      },
+      "alignment": {
+        "minimap2_version": "2.31-r1302",
+        "command": "-x sr -c --secondary=no",
+        "total_records": 597948,
+        "pairs": 298974,
+        "mapped_reads": 590436,
+        "literal_reads": 7512,
+        "clipped_reads": 24598,
+        "indel_reads": 20393
+      },
+      "comparisons": {
+        "r1_r2_gzip6_bytes": 42773624,
+        "r1_r2_zstd19_bytes": 33412892,
+        "r1_r2_fqc_v2_bytes": 34263156,
+        "r1_r2_cram_bytes": 12423444
+      },
+      "records": 597948,
+      "pairs": 298974,
+      "bases": 90290148,
+      "read_length": 151,
+      "status": "paired-head-reference-archive-fixed",
+      "warning": "R1/R2 head only; full 35x run, paired quality/ID/insert-size model and external-tool comparison pending; reference and PAF excluded from primary ratio; CRAM is a sum of two independent alignment containers",
+      "full_run": {
+        "spots": 355791257,
+        "bases": 107448959614,
+        "r1_gzip_bytes": 25019246552,
+        "r1_gzip_md5": "40eb3a20e288a581b23197fb32a5a5cc",
+        "r2_gzip_bytes": 25979206586,
+        "r2_gzip_md5": "9846d10d1eca7c52948cbe5f94d2cdaf"
+      }
     }
   ]
 }

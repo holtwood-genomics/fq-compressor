@@ -155,17 +155,29 @@ aligned query 上执行 CIGAR。R1/R2 归档因此从 827,688/827,546 B 降到
 随后用 `SRR14724532` R1 头部 298,974 reads + 完整 UCSC hg38 做真实数据验收：第一次运行
 因 soft-masked 参考的小写碱基只得到 9.741×，修复参考大小写归一化后 mapped 从 109,476
 升到 296,343，归档 **4,547,935 B（21.974× raw）**；quality/alignment/ID 三路为
-2,181,008/2,352,120/3,701 B，`verify` + `cmp` 通过，重复压缩 SHA 一致。完整 30× WGS、
-paired-end、`S/H/N/P`、长读 spliced alignment 与 BAM/CRAM 仍未完成。
+2,181,008/2,352,120/3,701 B，`verify` + `cmp` 通过，重复压缩 SHA 一致。
 
-但 `--max-ratio` 顶层开关、内置 mapper/BAM、参考嵌入、Phase 3 伪基因组与 `+` 行/CRLF/
-空 read 的逐字节保真仍未实现；两个实验容器/原型都只覆盖 canonical LF FASTQ。
+Phase 2.3 再把 R2 放进同一个容器：R1/R2 锁步读取、同 block 交错，R2 双方 mapped 且同
+contig 时只存相对 R1 的 `targetStart` zigzag delta。真实 R1/R2 各 298,974 reads 上，
+两个单端归档之和 9,678,812 B（20.650× raw）降到 **8,825,785 B（22.646× raw）**，
+节省 853,027 B（8.813%）；`mate_deltas=277,453/298,974`（92.80%），alignment 流
+4,939,473 → 4,094,927 B（−17.10%），quality 流 4,709,728 → 4,711,904 B（+0.046%），
+说明当前收益主要来自坐标表示，不是质量联合模型。`verify`、`decompress-paired` 与
+R1/R2 `cmp` 通过，重复压缩 SHA 一致，旧 R1 单端归档仍可读且重压逐字节一致。
+
+完整 30× WGS、完整 paired run、跨 mate 共享 ID/质量/insert-size 模型、`S/H/N/P`、
+长读 spliced alignment 与 BAM/CRAM 仍未完成。`--max-ratio` 顶层开关、内置 mapper/BAM、
+参考嵌入、Phase 3 伪基因组与 `+` 行/CRLF/空 read 的逐字节保真也仍未实现；两个实验
+容器/原型都只覆盖 canonical LF FASTQ。
 
 - 设计、证据矩阵与本地实验：[docs/max-ratio-design.md](max-ratio-design.md)
 - 决策：[ADR-0003](decisions/0003-max-ratio-mode.md)
 - 参考原型实测：[docs/max-ratio-baselines/2026-11-15-ref-container.md](max-ratio-baselines/2026-11-15-ref-container.md)
 - 参考原型契约：[openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-ref/design.md)
 - 参考原型笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-ref.md)
+- 真实 WGS paired 实测：[docs/max-ratio-baselines/2026-11-15-real-wgs-paired.md](max-ratio-baselines/2026-11-15-real-wgs-paired.md)
+- 真实 WGS paired 契约：[openspec/changes/2026-11-15-max-ratio-paired-end/design.md](../openspec/changes/2026-11-15-max-ratio-paired-end/design.md)
+- 真实 WGS paired 笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-paired-end.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-paired-end.md)
 - ID codec 实测：[docs/max-ratio-baselines/2026-11-15-id-codec.md](max-ratio-baselines/2026-11-15-id-codec.md)
 - ID codec 契约：[openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md](../openspec/changes/2026-11-15-max-ratio-phase2-id-codec/design.md)
 - ID codec 笔记：[.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md](../.agents/notes/implemented/architecture/2026-11-15-max-ratio-phase2-id-codec.md)
