@@ -40,13 +40,13 @@ jobs:
           docs_only=true
           while IFS= read -r file; do
             case "$file" in
+              docs/*|openspec/*|perf-baselines/*)
+                ;;
               *.md)
                 if [[ "$file" == */* ]]; then
                   docs_only=false
                   break
                 fi
-                ;;
-              docs/*|openspec/*|perf-baselines/*)
                 ;;
               *)
                 docs_only=false
