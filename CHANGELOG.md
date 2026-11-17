@@ -314,6 +314,11 @@
 
 ### 构建
 
+- **Release 发布门禁**：`v*` tag 先校验 tag 格式、`VERSION` 与 CHANGELOG 同名非空版本段，
+  再构建并跑 round-trip + verify sanity；成功后只创建或更新 draft Release，由维护者
+  核对产物后手动发布。workflow 会拒绝修改已正式发布的 Release，避免重跑 tag 覆盖
+  已有发布。→ 详见 `.agents/notes/implemented/process/2026-11-17-release-draft-gate.md`
+
 - **CI clang-tidy/sanitizer 门禁恢复**：clang-tidy 的“只配置”路径关闭 C++ 模块扫描，
   避免 `@...o.modmap` 不存在；max-ratio 新代码的魔数、const、optional 解引用和
   fqzcomp `malloc` 缓冲区按仓库规则收敛；CI ASan 仅关闭 GTest 1.17.0 + libc++18

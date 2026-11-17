@@ -1,7 +1,8 @@
 name: Release
 
-# 打 v* tag 时构建 release 二进制并附到对应 GitHub Release。
-# CHANGELOG 发布段与 tag 由发布者在 commit 时同步维护。
+# 打 v* tag 时校验 tag、VERSION 与 CHANGELOG，再构建 release 二进制。
+# 全部门禁通过后只创建或更新 draft Release；维护者核对 CHANGELOG、产物与
+# smoke test 后手动发布。已正式发布的 Release 不允许被重跑 workflow 覆盖。
 
 on:
   push:
@@ -15,7 +16,63 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  validate-release:
+    name: Validate release metadata
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify tag, VERSION and CHANGELOG
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          file_version="$(tr -d '[:space:]' < VERSION)"
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release tag must be vMAJOR.MINOR.PATCH: ${tag}" >&2
+            exit 1
+          fi
+          if [[ "$version" != "$file_version" ]]; then
+            echo "::error::tag ${tag} does not match VERSION ${file_version}" >&2
+            exit 1
+          fi
+          if ! grep -Eq "^## \[${version}\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no section for ${version}" >&2
+            exit 1
+          fi
+          section="$(awk -v heading="## [${version}]" '
+            index($0, heading) == 1 { found = 1; next }
+            found && /^## / { exit }
+            found { print }
+          ' CHANGELOG.md)"
+          if [[ -z "${section//[[:space:]]/}" ]]; then
+            echo "::error::CHANGELOG.md section for ${version} is empty" >&2
+            exit 1
+          fi
+
+          release_error="$(mktemp)"
+          trap 'rm -f "$release_error"' EXIT
+          endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${tag}"
+          if is_draft="$(gh api "$endpoint" --jq '.draft' 2>"$release_error")"; then
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::release ${tag} is already published; refusing to mutate it" >&2
+              exit 1
+            fi
+            echo "release metadata ok: ${tag} (existing draft will be updated)"
+          elif grep -Fq 'HTTP 404' "$release_error"; then
+            echo "release metadata ok: ${tag} (draft will be created)"
+          else
+            cat "$release_error" >&2
+            echo "::error::failed to query existing release ${tag}" >&2
+            exit 1
+          fi
+
   release:
+    needs: validate-release
     runs-on: ubuntu-24.04
     # 只有发布 job 需要写 Release；构建与 smoke test 继承只读权限。
     permissions:
@@ -66,9 +123,32 @@ jobs:
           ldd dist/fqc
           sha256sum dist/fqc > dist/SHA256SUMS
 
-      - name: Upload to GitHub Release
+      - name: Refuse to modify a published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release_error="$(mktemp)"
+          trap 'rm -f "$release_error"' EXIT
+          endpoint="repos/${GITHUB_REPOSITORY}/releases/tags/${GITHUB_REF_NAME}"
+          if is_draft="$(gh api "$endpoint" --jq '.draft' 2>"$release_error")"; then
+            if [[ "$is_draft" != "true" ]]; then
+              echo "::error::release ${GITHUB_REF_NAME} is already published; refusing to mutate it" >&2
+              exit 1
+            fi
+          elif grep -Fq 'HTTP 404' "$release_error"; then
+            echo "no existing release; a draft will be created"
+          else
+            cat "$release_error" >&2
+            echo "::error::failed to query existing release ${GITHUB_REF_NAME}" >&2
+            exit 1
+          fi
+
+      - name: Upload draft GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
           files: dist/*
           fail_on_unmatched_files: true
           generate_release_notes: true
+          # 先创建/更新 draft；维护者核对 CHANGELOG、产物与 smoke test 后手动发布。
+          draft: true

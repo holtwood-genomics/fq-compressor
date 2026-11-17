@@ -36,9 +36,10 @@ sha256sum -c --ignore-missing SHA256SUMS
 chmod +x fqc && ./fqc --version
 ```
 
-> Release 在打 `v*` tag 时由 CI 自动构建并附加（见
-> [.github/workflows/release.yml](.github/workflows/release.yml)）；发布前会跑一次
-> round-trip + verify 回归 sanity。
+> Release 在打 `v*` tag 时由 CI 校验 tag、`VERSION` 与 CHANGELOG、构建并创建
+> draft（见 [.github/workflows/release.yml](.github/workflows/release.yml)）；
+> 发布前会跑一次 round-trip + verify 回归 sanity，维护者核对产物后手动发布。
+> 已正式发布的 Release 不会被重跑 workflow 覆盖。
 
 **其他平台 / 从源码构建**：需 clang-18 + libc++、CMake 3.28+、Conan 2.x、Ninja，
 工具链要求与质量门禁见 [docs/building.md](docs/building.md)（ARM64 / AArch64 的额外步骤
