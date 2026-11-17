@@ -226,3 +226,5 @@ alignment、跨 mate 质量/ID 联合模型、伪基因组（Phase 3）与最终
 本仓库属于 [**Open Genomics**](https://github.com/open-genomics) · 高性能生物信息学系统软件与中文知识库
 
 </div>
+
+<!-- docs-only required-check probe 2026-11-17 -->
