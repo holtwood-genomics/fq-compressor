@@ -7,7 +7,13 @@
 - **Archive extension**: `.fqc`
 - **Format family**: `fqc-sequential/v2`
 - **Binary**: `fqc`
-- **Lifecycle**: active development
+- **Lifecycle**: incubating / prerelease
+- **Category**: tool
+- **Maintainer**: @holtwood
+- **Supported platforms**: Linux x86_64 (release artifact); Linux aarch64 source build
+- **Release channel**: GitHub Releases (`v0.1.0`; tag-triggered workflow)
+- **Security contact**: organization `SECURITY.md`; private vulnerability reporting enabled
+- **Last reviewed**: 2026-11-17
 - **Language**: C++23 (CMake + Conan)
 
 ## Core contracts
