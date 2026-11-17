@@ -62,7 +62,7 @@ jobs:
           mkdir -p dist
           cp build/${{ env.PRESET }}/src/fqc dist/fqc
           # 发布资产附带本项目许可证与静态链接依赖的许可证声明
-          cp LICENSE THIRD_PARTY_NOTICES.md dist/
+          cp LICENSE NOTICE THIRD_PARTY_NOTICES.md dist/
           ldd dist/fqc
           sha256sum dist/fqc > dist/SHA256SUMS
 

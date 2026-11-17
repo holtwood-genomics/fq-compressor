@@ -15,6 +15,7 @@
 - **Security contact**: organization `SECURITY.md`; private vulnerability reporting enabled
 - **Last reviewed**: 2026-11-17
 - **Language**: C++23 (CMake + Conan)
+- **License**: MIT for project-authored code; third-party notices in `THIRD_PARTY_NOTICES.md`
 
 ## Core contracts
 
