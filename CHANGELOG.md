@@ -342,6 +342,9 @@
   使用 libstdc++ 的 Conan 工具链已在本机实跑两个 harness（40 秒 + 修复后
   25 秒两轮，无崩溃），步骤记入
   `.agents/notes/implemented/process/2026-11-08-fuzzer-libstdcxx-toolchain.md`。
+- **CI job 超时上界**：`ci.yml`、`fuzz-nightly.yml`、`pages.yml` 与 `release.yml`
+  的所有 job 增加 `timeout-minutes`（10–30 分钟，按任务耗时分层），避免 runner
+  挂起或依赖卡死时长时间占用 Actions 额度；触发条件与发布门禁不变。
 
 ### 文档
 
