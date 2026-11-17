@@ -3,21 +3,8 @@ name: CI
 on:
   push:
     branches: [master]
-    # 纯文档提交不触发 CI（约省 20 runner-minutes/次）。只豁免根级 *.md
-    # 与专门的文档目录；不能用 **.md，否则 .agents/notes 也会被吞掉，而
-    # notes 封印校验（notes job）必须对 .agents/notes 的任何变更保持运行。
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - 'openspec/**'
-      - 'perf-baselines/**'
   pull_request:
     branches: [master]
-    paths-ignore:
-      - '*.md'
-      - 'docs/**'
-      - 'openspec/**'
-      - 'perf-baselines/**'
 
 permissions:
   contents: read
@@ -27,7 +14,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # required checks 要求 workflow 始终启动；纯文档变更由 changes job 识别，
+  # 重任务跳过但 check 仍会以 skipped/success 形式出现在 PR 上。
+  changes:
+    runs-on: ubuntu-24.04
+    outputs:
+      docs_only: ${{ steps.classify.outputs.docs_only }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed paths
+        id: classify
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${BASE_SHA}" || "${BASE_SHA}" =~ ^0+$ ]]; then
+            echo 'docs_only=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "${BASE_SHA}"
+          docs_only=true
+          while IFS= read -r file; do
+            case "$file" in
+              *.md)
+                if [[ "$file" == */* ]]; then
+                  docs_only=false
+                  break
+                fi
+                ;;
+              docs/*|openspec/*|perf-baselines/*)
+                ;;
+              *)
+                docs_only=false
+                break
+                ;;
+            esac
+          done < <(git diff --name-only "${BASE_SHA}" HEAD)
+          echo "docs_only=${docs_only}" >> "$GITHUB_OUTPUT"
+
   build-and-test:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -50,6 +81,8 @@ jobs:
         run: ./scripts/lint.sh format-check
 
   sanitizer:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -83,6 +116,8 @@ jobs:
         run: ./scripts/test.sh clang-asan
 
   thread-sanitizer:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -112,6 +147,8 @@ jobs:
           ./scripts/test.sh clang-tsan
 
   release-build:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     # 每次提交都编译 Release 配置（IPO/LTO + 可移植开关），否则 Release-only
     # 的编译失败要等到打 tag 才被发现；FQC_PORTABLE=ON 同时保证预发布的
     # 二进制不依赖 runner CPU（-march=native）。
@@ -134,6 +171,8 @@ jobs:
         run: ./scripts/test.sh clang-release-portable
 
   fuzz:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     # libFuzzer 短跑：解析器与归档读取器是纯输入驱动组件，最适配 fuzzing；
     # 长跑由独立的 fuzz-nightly.yml 承担。种子取冻结 fixture，从格式深处开变。
     runs-on: ubuntu-24.04
@@ -179,6 +218,8 @@ jobs:
           if-no-files-found: ignore
 
   coverage:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -232,6 +273,8 @@ jobs:
           fail_ci_if_error: false
 
   clang-tidy:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -262,6 +305,8 @@ jobs:
             sh -c 'exec clang-tidy-18 -p build/clang-debug "$1"' _
 
   notes:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
