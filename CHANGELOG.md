@@ -314,6 +314,10 @@
 
 ### 构建
 
+- **actions/cache 升级到 `v6.1.0`**：共享 `conan-build` composite action 从
+  `v4`（Node 20）升级到 `v6.1.0`（Node 24），消除 GitHub Actions 的 Node 20
+  弃用告警；缓存 key、`restore-keys` 和 Conan 目录语义不变。
+
 - **Release 发布门禁**：`v*` tag 先校验 tag 格式、`VERSION` 与 CHANGELOG 同名非空版本段，
   再构建并跑 round-trip + verify sanity；成功后只创建或更新 draft Release，由维护者
   核对产物后手动发布。workflow 会拒绝修改已正式发布的 Release，避免重跑 tag 覆盖
