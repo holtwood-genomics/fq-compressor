@@ -1,17 +1,7 @@
-# Dependabot 自动依赖更新
-# - conan: 检查 conanfile.py 中的 C++ 依赖
-# - github-actions: 检查 GitHub Actions 版本
+# Dependabot 自动更新 GitHub Actions
+# Action 固定到 commit SHA 后，由 Dependabot 在版本更新时同步更新 SHA 与行尾版本注释。
 version: 2
 updates:
-  - package-ecosystem: "conan"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    commit-message:
-      prefix: "chore(deps)"
-
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
