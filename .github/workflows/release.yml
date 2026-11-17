@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@77c3f8fd59034e6f3d5c58867ded0185b48d534f # v1
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639  # v1
         with:
           key: release-${{ runner.os }}
 
