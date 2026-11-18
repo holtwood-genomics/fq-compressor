@@ -123,7 +123,8 @@ jobs:
           # 发布资产附带本项目许可证与静态链接依赖的许可证声明
           cp LICENSE NOTICE THIRD_PARTY_NOTICES.md dist/
           ldd dist/fqc
-          sha256sum dist/fqc > dist/SHA256SUMS
+          # 校验和条目必须与上传后的扁平资产名一致，否则下载后无法直接校验。
+          (cd dist && sha256sum fqc > SHA256SUMS)
 
       - name: Refuse to modify a published release
         env:
