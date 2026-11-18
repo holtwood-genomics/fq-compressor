@@ -79,6 +79,8 @@ jobs:
     # 只有发布 job 需要写 Release；构建与 smoke test 继承只读权限。
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     env:
       # 构建目录由 preset 推导（CMakePresets.json 的 binaryDir 为
       # build/${presetName}）。产物路径统一引用此变量，避免 preset 与取件
@@ -125,6 +127,11 @@ jobs:
           ldd dist/fqc
           # 校验和条目必须与上传后的扁平资产名一致，否则下载后无法直接校验。
           (cd dist && sha256sum fqc > SHA256SUMS)
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a  # v3
+        with:
+          subject-path: dist/*
 
       - name: Refuse to modify a published release
         env:
