@@ -7,7 +7,7 @@
 
 ## Environment
 
-- Repository: `open-genomics/fq-compressor`
+- Repository: `holtwood-genomics/fq-compressor`
 - Branch: `master`
 - Working tree: 未提交；生产 `src/`/`include/`/`fqc-sequential/v2` 未改。
 - Build/test: `clang-debug` 构建通过；全量 18/18 tests 通过；format-check 通过。

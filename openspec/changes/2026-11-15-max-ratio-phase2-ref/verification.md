@@ -7,7 +7,7 @@
 
 ## Environment
 
-- Repository: `open-genomics/fq-compressor`
+- Repository: `holtwood-genomics/fq-compressor`
 - Branch: `master`
 - Build: `clang-debug`（Clang 21.1.8、libc++、CMake/Ninja）
 - htscodecs: `v1.6.7`，peeled commit `b9fc194f772e45bb0a1f44b08cbf8697a1384bae`

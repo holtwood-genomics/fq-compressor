@@ -29,7 +29,7 @@ void expectIndexedFamilyReject(const fqc::Error& error) {
     EXPECT_EQ(error.code, ErrorCode::kUnsupportedCodec);
     EXPECT_NE(error.message.find("unsupported FQC format family"), std::string::npos);
     EXPECT_NE(error.message.find("fqc-indexed/v2"), std::string::npos);
-    EXPECT_NE(error.message.find("open-genomics/fq-compressor-rust"), std::string::npos);
+    EXPECT_NE(error.message.find("holtwood-genomics/fq-compressor-rust"), std::string::npos);
 }
 
 }  // namespace

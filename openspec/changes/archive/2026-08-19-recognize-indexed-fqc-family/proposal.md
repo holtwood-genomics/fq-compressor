@@ -10,7 +10,7 @@
 
 C++ reader treated the Rust indexed magic as a generic “not an FQC v2 archive”.
 Users need a clear other-known-family reject pointing at
-`open-genomics/fq-compressor-rust`.
+`holtwood-genomics/fq-compressor-rust`.
 
 ## Changes
 

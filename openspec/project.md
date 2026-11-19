@@ -2,7 +2,7 @@
 
 ## Identity
 
-- **Canonical repository**: `open-genomics/fq-compressor`
+- **Canonical repository**: `holtwood-genomics/fq-compressor`
 - **Product name**: `fqc`
 - **Archive extension**: `.fqc`
 - **Format family**: `fqc-sequential/v2`

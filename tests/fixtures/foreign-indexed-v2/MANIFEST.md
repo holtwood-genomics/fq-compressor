@@ -1,6 +1,6 @@
 # Foreign indexed fixture (for family rejection)
 
-Copied from `open-genomics/fq-compressor-rust` `tests/fixtures/indexed-v2/frozen.fqc`
+Copied from `holtwood-genomics/fq-compressor-rust` `tests/fixtures/indexed-v2/frozen.fqc`
 for `FQC-FAMILY-001` / `recognize-indexed-fqc-family`.
 
 | Field | Value |

@@ -3,7 +3,7 @@
 ## Metadata
 
 - Status: `Implemented (measurement scope); archive pending review`
-- Repository: `open-genomics/fq-compressor`
+- Repository: `holtwood-genomics/fq-compressor`
 - Date: 2026-11-14
 - Capability: `max-ratio-research`（Phase 0 测量底座；尚不改变 `archive-format`）
 - Decision IDs: `ADR-0003`
