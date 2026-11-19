@@ -12,7 +12,7 @@
 ## 源码构建
 
 ```bash
-git clone https://github.com/open-genomics/fq-compressor.git
+git clone https://github.com/holtwood-genomics/fq-compressor.git
 cd fq-compressor
 ./scripts/build.sh clang-release
 ```
@@ -26,7 +26,7 @@ cd fq-compressor
 ./scripts/lint.sh format           # 自动格式化
 ```
 
-> **同名二进制 `PATH` 覆盖风险**：本仓库与 [fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust)
+> **同名二进制 `PATH` 覆盖风险**：本仓库与 [fq-compressor-rust](https://github.com/holtwood-genomics/fq-compressor-rust)
 > 都安装名为 `fqc` 的二进制。若两者同时进入 `PATH`，后安装者（或 `PATH` 中更靠前的目录）会覆盖
 > 另一个，请用 `which fqc` 确认实际调用的实现。
 

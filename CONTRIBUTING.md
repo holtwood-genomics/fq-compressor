@@ -55,7 +55,7 @@
 
 ## 报告问题
 
-- 优先用 [Issue 模板](https://github.com/open-genomics/fq-compressor/issues/new/choose)
+- 优先用 [Issue 模板](https://github.com/holtwood-genomics/fq-compressor/issues/new/choose)
   提交（bug 请附复现步骤、环境与 `fqc --version`）。
 - 安全漏洞**不要**发公开 issue，请走 [SECURITY.md](SECURITY.md) 的私有渠道。
 - 不确定是否该修/该加？先开 issue 讨论，避免大 PR 方向跑偏。

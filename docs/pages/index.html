@@ -121,7 +121,7 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
         magic 字节为 <code>46 51 43 56 32 0D 0A 1A</code>——即 ASCII <code>FQCV2</code> 后跟 CR LF 与 0x1A。</p>
         <div class="card danger">
           <div class="card-title"><span class="tag">注意</span>扩展名不能判定格式</div>
-          <p>同名但<b>格式不兼容</b>的兄弟实现 <a href="https://github.com/open-genomics/fq-compressor-rust">fq-compressor-rust</a>
+          <p>同名但<b>格式不兼容</b>的兄弟实现 <a href="https://github.com/holtwood-genomics/fq-compressor-rust">fq-compressor-rust</a>
           （Rust，<code>fqc-indexed/v2</code>）使用不同的 magic 与字节布局，两者<b>不能互相解码</b>。
           因此 <code>.fqc</code> 扩展名不具判别力，reader 必须先检查 archive magic。</p>
         </div>
@@ -490,7 +490,7 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
 
       <section class="section cat-architecture" id="arch-performance" data-cat="architecture">
         <h3><span class="kicker">Benchmarks</span>性能基准</h3>
-        <p>当前 realistic 绝对 baseline（2026-11-06，commit <code>513b9f9</code>，16 GiB 预算、64 MiB 目标帧、4 parser、5 次中位数）；不是优化 A/B，不同日期或运行窗口的数字不可横比。极差与原始 JSONL 见<a href="https://github.com/open-genomics/fq-compressor/blob/master/docs/benchmarks.md">docs/benchmarks.md</a>。</p>
+        <p>当前 realistic 绝对 baseline（2026-11-06，commit <code>513b9f9</code>，16 GiB 预算、64 MiB 目标帧、4 parser、5 次中位数）；不是优化 A/B，不同日期或运行窗口的数字不可横比。极差与原始 JSONL 见<a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/docs/benchmarks.md">docs/benchmarks.md</a>。</p>
         <div class="table-wrap">
           <table>
             <thead>
@@ -505,7 +505,7 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
         </div>
         <div class="card warn">
           <div class="card-title"><span class="tag">谨慎</span>数字仅供参考</div>
-          <p>WSL2 状态波动极大（同代码同配置两次跑吞吐可差 20–85%）。真实生物语料实测见<a href="https://github.com/open-genomics/fq-compressor/blob/master/docs/real-corpus.md">docs/real-corpus.md</a>；并行化收益沿瓶颈逐步推进：长读解析占比小，并行解析收益落在噪声内。</p>
+          <p>WSL2 状态波动极大（同代码同配置两次跑吞吐可差 20–85%）。真实生物语料实测见<a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/docs/real-corpus.md">docs/real-corpus.md</a>；并行化收益沿瓶颈逐步推进：长读解析占比小，并行解析收益落在噪声内。</p>
         </div>
       </section>
 
@@ -518,14 +518,14 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
               <tr><th>资源</th><th>说明</th></tr>
             </thead>
             <tbody>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor">GitHub 仓库</a></td><td>源码、CI、issue 跟踪</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor/blob/master/ALGORITHM.md">ALGORITHM.md</a></td><td>压缩算法与原理（本页第 02 章来源）</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor/blob/master/ARCHITECTURE.md">ARCHITECTURE.md</a></td><td>架构与字节布局（本页第 01 / 03 章来源）</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor/tree/master/openspec/specs/archive-format">openspec · archive-format spec</a></td><td>顺序归档格式的规范性规格与验收场景</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor/blob/master/docs/building.md">docs/building.md</a></td><td>构建、工具链、质量门禁</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor/blob/master/docs/real-corpus.md">docs/real-corpus.md</a></td><td>真实生物语料验收</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor/blob/master/CHANGELOG.md">CHANGELOG.md</a></td><td>变更记录</td></tr>
-              <tr><td><a href="https://github.com/open-genomics/fq-compressor-rust">fq-compressor-rust</a></td><td>Rust 兄弟实现（<code>fqc-indexed/v2</code>，格式不兼容）</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor">GitHub 仓库</a></td><td>源码、CI、issue 跟踪</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/ALGORITHM.md">ALGORITHM.md</a></td><td>压缩算法与原理（本页第 02 章来源）</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/ARCHITECTURE.md">ARCHITECTURE.md</a></td><td>架构与字节布局（本页第 01 / 03 章来源）</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor/tree/master/openspec/specs/archive-format">openspec · archive-format spec</a></td><td>顺序归档格式的规范性规格与验收场景</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/docs/building.md">docs/building.md</a></td><td>构建、工具链、质量门禁</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/docs/real-corpus.md">docs/real-corpus.md</a></td><td>真实生物语料验收</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/CHANGELOG.md">CHANGELOG.md</a></td><td>变更记录</td></tr>
+              <tr><td><a href="https://github.com/holtwood-genomics/fq-compressor-rust">fq-compressor-rust</a></td><td>Rust 兄弟实现（<code>fqc-indexed/v2</code>，格式不兼容）</td></tr>
             </tbody>
           </table>
         </div>
@@ -533,9 +533,9 @@ $fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc <span class="c"># �
 
       <footer class="site-footer">
         <div class="links">
-          <a href="https://github.com/open-genomics/fq-compressor">仓库</a>
-          <a href="https://github.com/open-genomics/fq-compressor/blob/master/LICENSE">MIT License</a>
-          <a href="https://github.com/open-genomics/fq-compressor/actions/workflows/ci.yml">CI</a>
+          <a href="https://github.com/holtwood-genomics/fq-compressor">仓库</a>
+          <a href="https://github.com/holtwood-genomics/fq-compressor/blob/master/LICENSE">MIT License</a>
+          <a href="https://github.com/holtwood-genomics/fq-compressor/actions/workflows/ci.yml">CI</a>
         </div>
         <p>fq-compressor (FQC v2) 设计文档站 · 内容源自仓库内 ALGORITHM.md / ARCHITECTURE.md / openspec。</p>
       </footer>

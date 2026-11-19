@@ -8,7 +8,7 @@
 ## 背景
 
 生态内有两个同名实现（本仓库 C++ `fqc` 与
-[fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust) 的 Rust `fqc`），
+[fq-compressor-rust](https://github.com/holtwood-genomics/fq-compressor-rust) 的 Rust `fqc`），
 共用 `fqc`/`.fqc` 名字。若两者格式不兼容却同名，用户无法凭扩展名判断用哪个解码器。
 
 ## 决策

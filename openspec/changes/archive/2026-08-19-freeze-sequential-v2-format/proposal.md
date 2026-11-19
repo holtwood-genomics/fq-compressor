@@ -3,7 +3,7 @@
 ## Metadata
 
 - Status: `Archived`
-- Repository: `open-genomics/fq-compressor`
+- Repository: `holtwood-genomics/fq-compressor`
 - Audit base: `1361d4e8628a210d8fbfd415a761e67a625fd6be`
 - Capability: `archive-format`
 - Task IDs: `FQC-CPP-FMT-001`, `ORG-GOV-001`, `ORG-CONTRACT-001`

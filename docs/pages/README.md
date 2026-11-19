@@ -8,7 +8,7 @@ fq-compressor 的 GitHub Pages 站点，用一页介绍三大主题：
 
 内容改写自仓库根目录的 `ALGORITHM.md`、`ARCHITECTURE.md` 与
 `openspec/specs/archive-format/spec.md`，站点地址：
-<https://open-genomics.github.io/fq-compressor/>
+<https://holtwood-genomics.github.io/fq-compressor/>
 
 ## 结构
 
@@ -33,7 +33,7 @@ docs/pages/
 - 工作流：[`.github/workflows/pages.yml`](../../.github/workflows/pages.yml)
   在推送 `docs/pages/**` 时构建并部署。
 - **仓库要求**：Settings → Pages → Source 选择 **GitHub Actions**。
-- 生成站点 `<https://open-genomics.github.io/fq-compressor/>`。
+- 生成站点 `<https://holtwood-genomics.github.io/fq-compressor/>`。
 
 ## 本地预览
 

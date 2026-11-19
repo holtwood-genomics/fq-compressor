@@ -7,7 +7,7 @@
 
 ## Environment
 
-- Repository: `open-genomics/fq-compressor`
+- Repository: `holtwood-genomics/fq-compressor`
 - Branch: `master`
 - Working tree state at verification: Phase 0 探针、数据集 manifest 与测试已实现，尚未提交；
   生产格式/CLI 未改。

@@ -22,7 +22,7 @@ namespace fqc::format {
 namespace {
 
 constexpr std::array<std::uint8_t, 8> kArchiveMagic = {'F', 'Q', 'C', 'V', '2', '\r', '\n', 0x1A};
-// Indexed family magic (Rust open-genomics/fq-compressor-rust): PNG-style 89 F Q C ...
+// Indexed family magic (Rust holtwood-genomics/fq-compressor-rust): PNG-style 89 F Q C ...
 constexpr std::array<std::uint8_t, 8> kIndexedFamilyMagic = {
     0x89, 'F', 'Q', 'C', '\r', '\n', 0x1A, '\n'};
 constexpr std::uint32_t kFrameMagic = 0x324D5246U;
@@ -940,7 +940,7 @@ auto ArchiveReader::open() -> Result<ArchiveMetadata> {
         return makeError<ArchiveMetadata>(
             ErrorCode::kUnsupportedCodec,
             "unsupported FQC format family: fqc-indexed/v2 "
-            "(magic 89 46 51 43 0D 0A 1A 0A); use open-genomics/fq-compressor-rust");
+            "(magic 89 46 51 43 0D 0A 1A 0A); use holtwood-genomics/fq-compressor-rust");
     }
     if (!std::equal(kArchiveMagic.begin(), kArchiveMagic.end(), magicBytes.begin())) {
         return makeError<ArchiveMetadata>(

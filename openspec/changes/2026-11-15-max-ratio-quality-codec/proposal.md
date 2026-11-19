@@ -3,7 +3,7 @@
 ## Metadata
 
 - Status: `Implemented (research tool; production integration pending)`
-- Repository: `open-genomics/fq-compressor`
+- Repository: `holtwood-genomics/fq-compressor`
 - Date: 2026-11-15
 - Capability: `max-ratio-research`（质量 codec 证据；尚不改变 `archive-format`）
 - Decision IDs: `ADR-0003`

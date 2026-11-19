@@ -7,7 +7,7 @@
 *A columnar streaming FASTQ compressor in C++23 — small and verifiable archives, bounded memory, pipe-friendly I/O.*
 
 > **格式族 `fqc-sequential/v2`**（magic `46 51 43 56 32 0D 0A 1A`，`FQCV2\r\n\x1A`）：
-> 与 [fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust)
+> 与 [fq-compressor-rust](https://github.com/holtwood-genomics/fq-compressor-rust)
 > （Rust，`fqc-indexed/v2`，magic `89 46 51 43 0D 0A 1A 0A`）同名但**格式不兼容**——
 > magic 与字节布局不同，不能互相解码；`.fqc` 扩展名不能判定格式，reader 必须检查 archive magic。
 
@@ -15,8 +15,8 @@
 > 298,974 reads + 完整 hg38 上达到 **22.646× raw**；两个单端归档之和为 20.650×。
 > 参考/PAF 不计入，不是完整 30×。详见 [一页纸总结](docs/max-ratio-one-pager.md)。
 
-[![CI 状态](https://github.com/open-genomics/fq-compressor/actions/workflows/ci.yml/badge.svg)](https://github.com/open-genomics/fq-compressor/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/open-genomics/fq-compressor/branch/master/graph/badge.svg)](https://codecov.io/gh/open-genomics/fq-compressor)
+[![CI 状态](https://github.com/holtwood-genomics/fq-compressor/actions/workflows/ci.yml/badge.svg)](https://github.com/holtwood-genomics/fq-compressor/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/holtwood-genomics/fq-compressor/branch/master/graph/badge.svg)](https://codecov.io/gh/holtwood-genomics/fq-compressor)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 ![C++23](https://img.shields.io/badge/C%2B%2B-23-blue.svg)
 ![CMake 3.28+](https://img.shields.io/badge/CMake-3.28%2B-blue.svg)
@@ -26,12 +26,12 @@
 
 ## 安装与获取
 
-**Linux x86_64**：从 [GitHub Releases](https://github.com/open-genomics/fq-compressor/releases)
+**Linux x86_64**：从 [GitHub Releases](https://github.com/holtwood-genomics/fq-compressor/releases)
 下载 `fqc` 与 `SHA256SUMS`，核对校验和后再运行：
 
 ```bash
-curl -LO https://github.com/open-genomics/fq-compressor/releases/latest/download/fqc
-curl -LO https://github.com/open-genomics/fq-compressor/releases/latest/download/SHA256SUMS
+curl -LO https://github.com/holtwood-genomics/fq-compressor/releases/latest/download/fqc
+curl -LO https://github.com/holtwood-genomics/fq-compressor/releases/latest/download/SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 chmod +x fqc && ./fqc --version
 ```
@@ -46,7 +46,7 @@ chmod +x fqc && ./fqc --version
 与多核参数也在该文档）：
 
 ```bash
-git clone https://github.com/open-genomics/fq-compressor.git
+git clone https://github.com/holtwood-genomics/fq-compressor.git
 cd fq-compressor && ./scripts/build.sh clang-release
 ```
 
@@ -61,7 +61,7 @@ fqc compress   -i R1.fastq.gz -2 R2.fastq.gz -o paired.fqc   # 双端
 
 源码构建的二进制在 `build/clang-release/src/fqc`；完整参数 `fqc --help`。
 
-> 若同时安装了 [fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust) 的 `fqc`，
+> 若同时安装了 [fq-compressor-rust](https://github.com/holtwood-genomics/fq-compressor-rust) 的 `fqc`，
 > 两个同名二进制会互相覆盖，`PATH` 中靠前者生效；用 `which fqc` 确认实际调用的实现。
 
 ## 核心算法
@@ -218,12 +218,12 @@ alignment、跨 mate 质量/ID 联合模型、伪基因组（Phase 3）与最终
 
 ## 相关项目
 
-- [fq-compressor-rust](https://github.com/open-genomics/fq-compressor-rust) — 同题 Rust 实现（块索引 `.fqc`，同名不同格式族、互不兼容）
-- [fastq-tools](https://github.com/open-genomics/fastq-tools) — C++23 FASTQ 质控工具，同属组织 C++ 系统线
-- [minibwa-rust](https://github.com/open-genomics/minibwa-rust) — 短读比对器（Rust 线）
+- [fq-compressor-rust](https://github.com/holtwood-genomics/fq-compressor-rust) — 同题 Rust 实现（块索引 `.fqc`，同名不同格式族、互不兼容）
+- [fastq-tools](https://github.com/holtwood-genomics/fastq-tools) — C++23 FASTQ 质控工具，同属组织 C++ 系统线
+- [minibwa-rust](https://github.com/holtwood-genomics/minibwa-rust) — 短读比对器（Rust 线）
 
 <div align="center">
 
-本仓库属于 [**Open Genomics**](https://github.com/open-genomics) · 高性能生物信息学系统软件与中文知识库
+本仓库属于 [**Holtwood Genomics**](https://github.com/holtwood-genomics) · 高性能生物信息学系统软件与中文知识库
 
 </div>

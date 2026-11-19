@@ -15,7 +15,7 @@
 请**不要**在公开 issue 中报告安全漏洞。选择以下渠道之一:
 
 1. **GitHub 私有漏洞上报**(首选):仓库页面 → Settings → Security →
-   [Private vulnerability reporting](https://github.com/open-genomics/fq-compressor/security/advisories/new)。
+   [Private vulnerability reporting](https://github.com/holtwood-genomics/fq-compressor/security/advisories/new)。
 2. **邮件**:jiashuai.mail@gmail.com(邮件主题请以 `[SECURITY]` 开头)。
 
 我们会在收到报告后尽快确认(通常 3 个工作日),并在修复发布前不公开细节。
