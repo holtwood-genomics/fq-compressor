@@ -2,11 +2,15 @@
 
 ## [未发布]
 
+## [0.2.1] - 2026-11-19
+
 ### 构建
 
 - **Release SHA256SUMS 路径修正**：校验和改为在 `dist/` 内生成，条目为 `fqc`，
   与 GitHub Release 上传后的扁平资产名一致；此前条目为 `dist/fqc`，下载资产后
   无法直接 `sha256sum -c SHA256SUMS`。
+- **发布 provenance**：Release workflow 为发布资产生成 build provenance attestation，
+  并启用 Scorecard 分析；本版本是首个使用修正后发布流程的版本。
 
 ## [0.2.0] - 2026-11-18
 
